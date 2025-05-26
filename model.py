@@ -17,7 +17,7 @@ class Zoo(torch.nn.Module):
         # NOTE we may get better perf from freezing our prior 
         #     and only training a transformer adapter?
 
-    def forward(self, preferred_embeds, latents):
+    def forward(self, latents, preferred_embeds):
         pred = self.prior(latents, preferred_embeds)
         return pred
     

@@ -60,15 +60,15 @@ import uuid
 def generate_gpu(in_im_embs, prompt='the scene'):
     with torch.no_grad():
         in_im_embs = in_im_embs.to('cuda')
-        if isinstance(in_im_embs, list):
-            in_im_embs = torch.stack(in_im_embs, 1)
-        print(in_im_embs.shape)
-        negative_image_embeds = model.prior_pipe.get_zero_embed()
+
+        negative_image_embeds = in_im_embs[0] # model.prior_pipe.get_zero_embed()
+        positive_image_embeds = in_im_embs[1]
 
         images = model.kandinsky_pipe(
             num_inference_steps=50,
-            image_embeds=in_im_embs,
+            image_embeds=positive_image_embeds,
             negative_image_embeds=negative_image_embeds,
+            guidance_scale=11,
         ).images[0]
         cond = (
                     model.prior_pipe.image_processor(images, return_tensors="pt")
@@ -98,21 +98,25 @@ def generate(in_im_embs, ):
 
 #######################
 
-def get_user_emb(embs, ys):
-    positives = [e for e, ys in zip(embs, ys) if ys == 1]
-    embs = random.sample(positives, min(8, len(positives)))
-    # TODO use as neg prompt?
-    negs = [e for e, ys in zip(embs, ys) if ys == 0]
-    negative_embs = random.sample(negs, min(8, len(negs)))
-
-    positives = torch.stack(positives, 1)
-
-    prompt_embeds = positives
-    latent = torch.randn(positives.shape[0], 1, positives.shape[-1])
+def sample_embs(prompt_embeds):
+    latent = torch.randn(prompt_embeds.shape[0], 1, prompt_embeds.shape[-1])
     if prompt_embeds.shape[1] < 8: # TODO grab as `k` arg from config
             prompt_embeds = torch.nn.functional.pad(prompt_embeds, [0, 0, 0, 8-prompt_embeds.shape[1]])
     assert prompt_embeds.shape[1] == 8, f"The model is set to take `k`` cond image embeds but is shape {prompt_embeds.shape}"
-    image_embeds = model.prior(positives.to('cuda'), latent.to('cuda')).predicted_image_embedding
+    image_embeds = model(latent.to('cuda'), prompt_embeds.to('cuda')).predicted_image_embedding
+
+    return image_embeds
+
+def get_user_emb(embs, ys):
+    positives = [e for e, ys in zip(embs, ys) if ys == 1]
+    embs = random.sample(positives, min(8, len(positives)))
+    positives = torch.stack(embs, 1)
+
+    negs = [e for e, ys in zip(embs, ys) if ys == 0]
+    negative_embs = random.sample(negs, min(8, len(negs)))
+    negatives = torch.stack(negative_embs, 1)
+
+    image_embeds = torch.stack([sample_embs(negatives), sample_embs(positives)])
 
     return image_embeds
 
@@ -172,7 +176,8 @@ def background_next_image():
                     # only keep 50 images & embeddings & ips, then remove oldest besides calibrating
                     prevs_df = pd.concat((prevs_df.iloc[:6], prevs_df.iloc[7:]))
     
-def pluck_img(user_id, ):
+# TODO revert pluck to work by either "made for this user" or similarity.
+def pluck_img(user_id):
     not_rated_rows = prevs_df[[i[1]['user:rating'].get(user_id, 'gone') == 'gone' for i in prevs_df.iterrows()]]
     while len(not_rated_rows) == 0:
         not_rated_rows = prevs_df[[i[1]['user:rating'].get(user_id, 'gone') == 'gone' for i in prevs_df.iterrows()]]

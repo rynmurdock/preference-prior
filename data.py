@@ -121,8 +121,6 @@ class ImageFolderSample(torchvision.datasets.ImageFolder):
         drop_whole_set_mask = torch.rand(1,) < .1
         if drop_whole_set_mask:
             samples = torch.zeros_like(samples)
-
-
         return {'samples': samples[:, :3], 'target': target[:3]}
 
     def __getitem__(self, index: int):
@@ -136,7 +134,14 @@ def get_dataset(data_path, processor):
 
 
 def get_dataloader(data_path, batch_size, num_workers, processor):
-    dataloader = torch.utils.data.DataLoader(get_dataset(data_path, processor=processor), num_workers=num_workers, collate_fn=my_collate, batch_size=batch_size, shuffle=True)
+    dataloader = torch.utils.data.DataLoader(
+                                            get_dataset(data_path, processor=processor), 
+                                            num_workers=num_workers, 
+                                            collate_fn=my_collate, 
+                                            batch_size=batch_size, 
+                                            shuffle=True, 
+                                            drop_last=True
+                                            )
     return dataloader
 
 

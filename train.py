@@ -41,6 +41,8 @@ def get_loss(model, input, target, tokenizer):
 
     target = target.to(torch.float32)
     mse_loss = torch.nn.functional.mse_loss(target, output).mean()
+    
+    assert len(target.shape) == 2 and len(output.shape) == 2
     cosine_loss = 1 - torch.nn.functional.cosine_similarity(output, target).mean()
     loss =  mse_loss + .2 * cosine_loss
 
