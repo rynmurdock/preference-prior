@@ -41,7 +41,7 @@ def get_loss(model, input, target, tokenizer):
 
     target = target.to(torch.float32)
     mse_loss = torch.nn.functional.mse_loss(target, output).mean()
-    cosine_loss = torch.nn.functional.cosine_similarity(output, target).mean()
+    cosine_loss = 1 - torch.nn.functional.cosine_similarity(output, target).mean()
     loss =  mse_loss + .2 * cosine_loss
 
     logging.info(f'MSE: {mse_loss.item()}, Cosine: {cosine_loss.item()}, Weighted Total: {loss.item()}')
@@ -63,8 +63,8 @@ def main():
             if batch is None:
                 continue
 
-            sample, target = batch
-            sample = sample.to(config.device)
+            input, target = batch
+            input = input.to(config.device)
             target = target.to(config.device)
 
             if ind % 50 == 0:
@@ -79,7 +79,7 @@ def main():
  '../generative_recommender/Blue_Tigers_space/8o.png',]
                     model.do_validation([[Image.open('../'+j) for j in examples]])
 
-            loss = get_loss(model, sample, target, tokenizer)
+            loss = get_loss(model, input, target, tokenizer)
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()

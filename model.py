@@ -32,7 +32,6 @@ class Zoo(torch.nn.Module):
         images[0].save('latest_val.png')
         return images
 
-
 def get_model_and_tokenizer(path, device, dtype):
     prior = PriorTransformer.from_pretrained("ECLIPSE-Community/ECLIPSE_KandinskyV22_Prior" 
                                              if path is None else path).to(device)

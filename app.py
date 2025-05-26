@@ -63,7 +63,7 @@ def generate_gpu(in_im_embs, prompt='the scene'):
         if isinstance(in_im_embs, list):
             in_im_embs = torch.stack(in_im_embs, 1)
         print(in_im_embs.shape)
-        negative_image_embeds = torch.zeros_like(in_im_embs)
+        negative_image_embeds = model.prior_pipe.get_zero_embed()
 
         images = model.kandinsky_pipe(
             num_inference_steps=50,
