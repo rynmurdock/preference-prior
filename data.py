@@ -35,7 +35,7 @@ def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_
                 best_ratio = ratio
     return best_ratio
 
-def dynamic_preprocess(image, min_num=1, max_num=12, image_size=448, use_thumbnail=False):
+def dynamic_preprocess(image, min_num=1, max_num=8, image_size=448, use_thumbnail=False):
     orig_width, orig_height = image.size
     aspect_ratio = orig_width / orig_height
 
@@ -74,7 +74,7 @@ def dynamic_preprocess(image, min_num=1, max_num=12, image_size=448, use_thumbna
     return processed_images
 
 
-def load_image(image_file, pil_image=None, input_size=224, max_num=12):
+def load_image(image_file, pil_image=None, input_size=224,):
     if not pil_image:
         pil_image = Image.open(image_file)
     image = pil_image.convert('RGB')
@@ -86,8 +86,11 @@ def load_image(image_file, pil_image=None, input_size=224, max_num=12):
 
 def my_collate(batch):
     try:
-        targets = torch.stack([s['target'] for s in batch if s is not None])
-        samples = torch.stack([s['samples'] for s in batch if s is not None])
+        targets = torch.stack([s['target'] for s in batch])
+        samples = torch.stack([s['samples'] for s in batch])
+
+        # targets = torch.stack([s['target'] for s in batch if s is not None])
+        # samples = torch.stack([s['samples'] for s in batch if s is not None])
     except Exception as e:
       logging.warning('my_collate issue ', e)
       return None
@@ -129,11 +132,11 @@ class ImageFolderSample(torchvision.datasets.ImageFolder):
 # https://data.mendeley.com/datasets/fs4k2zc5j5/3
 # Gomez, J. C., Ibarra-Manzano, M. A., & Almanza-Ojeda, D. L. (2017). User Identification in Pinterest Through the Refinement of Cascade Fusion of Text and Images. Research in Computing Science, 144, 41-52.
 def get_dataset(data_path, processor):
-    return ImageFolderSample(data_path, 12, processor)
+    return ImageFolderSample(data_path, 8, processor)
 
 
 def get_dataloader(data_path, batch_size, num_workers, processor):
-    dataloader = torch.utils.data.DataLoader(get_dataset(data_path, processor=processor), num_workers=num_workers, collate_fn=my_collate, batch_size=batch_size)
+    dataloader = torch.utils.data.DataLoader(get_dataset(data_path, processor=processor), num_workers=num_workers, collate_fn=my_collate, batch_size=batch_size, shuffle=True)
     return dataloader
 
 

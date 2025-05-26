@@ -471,9 +471,9 @@ class KandinskyPriorPipeline(DiffusionPipeline):
                 prompt_embeds = torch.cat(full_seq, 0)
             full_prompt.append(prompt_embeds)
         prompt_embeds = torch.stack(full_prompt)
-        if prompt_embeds.shape[1] < 12: # TODO grab as `k` arg from config
-            prompt_embeds = torch.nn.functional.pad(prompt_embeds, [0, 0, 0, 12-prompt_embeds.shape[1]])
-        assert prompt_embeds.shape[1] == 12, f"The model is set to take 12 cond image embeds but is shape {prompt_embeds.shape}"
+        if prompt_embeds.shape[1] < 8: # TODO grab as `k` arg from config
+            prompt_embeds = torch.nn.functional.pad(prompt_embeds, [0, 0, 0, 8-prompt_embeds.shape[1]])
+        assert prompt_embeds.shape[1] == 8, f"The model is set to take `k`` cond image embeds but is shape {prompt_embeds.shape}"
 
         prompt_embeds = prompt_embeds.to('cuda') # TODO set with `k` arg from config
 

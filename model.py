@@ -1,9 +1,7 @@
 
 import torch
 import logging
-
 from diffusers import DiffusionPipeline
-from torchvision.transforms.functional import to_tensor
 
 from prior.pipeline_kandinsky_prior import KandinskyPriorPipeline
 from prior.prior_transformer import PriorTransformer
@@ -20,10 +18,11 @@ class Zoo(torch.nn.Module):
         #     and only training a transformer adapter?
 
     def forward(self, preferred_embeds, latents):
-        pred = self.prior(preferred_embeds, latents)
+        pred = self.prior(latents, preferred_embeds)
         return pred
     
     def do_validation(self, images): # TODO constant val seed
+        assert all([len(i) == 8 for i in images]), f'We have must have `k` images, not {len(images)}.'
         image_embeds, negative_image_embeds = self.prior_pipe(images).to_tuple()
         images = self.kandinsky_pipe(
             num_inference_steps=50,
@@ -35,7 +34,9 @@ class Zoo(torch.nn.Module):
 
 
 def get_model_and_tokenizer(path, device, dtype):
-    prior = PriorTransformer.from_pretrained("ECLIPSE-Community/ECLIPSE_KandinskyV22_Prior").to(device)
+    prior = PriorTransformer.from_pretrained("ECLIPSE-Community/ECLIPSE_KandinskyV22_Prior" 
+                                             if path is None else path).to(device)
+        
     pipe_prior = KandinskyPriorPipeline.from_pretrained("kandinsky-community/kandinsky-2-2-prior", prior=prior).to(device)
     pipe_prior.image_encoder = pipe_prior.image_encoder.to(device, dtype)
     # Note: don't set the prior to `dtype`` as it may be half precision, 
