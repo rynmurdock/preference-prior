@@ -176,14 +176,26 @@ def background_next_image():
                     # only keep 50 images & embeddings & ips, then remove oldest besides calibrating
                     prevs_df = pd.concat((prevs_df.iloc[:6], prevs_df.iloc[7:]))
     
-# TODO revert pluck to work by either "made for this user" or similarity.
 def pluck_img(user_id):
+    rated_rows = prevs_df[[i[1]['user:rating'].get(user_id, None) is not None for i in prevs_df.iterrows()]]
+    ems = rated_rows['embeddings'].to_list()
+    ys = [i[user_id][0] for i in rated_rows['user:rating'].to_list()]
+    user_emb = get_user_emb(ems, ys)
+
     not_rated_rows = prevs_df[[i[1]['user:rating'].get(user_id, 'gone') == 'gone' for i in prevs_df.iterrows()]]
     while len(not_rated_rows) == 0:
         not_rated_rows = prevs_df[[i[1]['user:rating'].get(user_id, 'gone') == 'gone' for i in prevs_df.iterrows()]]
         time.sleep(.1)
-    img = not_rated_rows['paths'].to_list()[0]
-    print(img)
+        # TODO optimize this lol
+    best_sim = -10000000
+    for i in not_rated_rows.iterrows():
+        # TODO sloppy .to but it is 3am.
+        sim = torch.cosine_similarity(i[1]['embeddings'].detach().to('cpu'), user_emb.detach().to('cpu'), -1)
+        if len(sim) > 1: sim = sim[1]
+        if sim.squeeze() > best_sim:
+            best_sim = sim
+            best_row = i[1]
+    img = best_row['paths']
     return img
 
 def next_image(calibrate_prompts, user_id):
@@ -193,7 +205,7 @@ def next_image(calibrate_prompts, user_id):
             image = prevs_df[prevs_df['paths'] == cal_video]['paths'].to_list()[0]
             return image, calibrate_prompts, 
         else:
-            image  = pluck_img(user_id)
+            image = pluck_img(user_id)
             return image, calibrate_prompts
 
 
