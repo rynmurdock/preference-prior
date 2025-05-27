@@ -1,7 +1,7 @@
 import torch
 
 # NOTE model path name changed
-model_path = './last_epoch_ckpt/'
+model_path = None # './last_epoch_ckpt/'
 lr = 1e-5
 device = 'cuda'
 dtype = torch.bfloat16

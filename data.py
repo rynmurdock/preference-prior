@@ -108,20 +108,29 @@ class ImageFolderSample(torchvision.datasets.ImageFolder):
             target_path, class_type = self.samples[index]
             target = torch.from_numpy(self.processor(self.loader(target_path)).data['pixel_values'][0])
 
+            # not sure why this is necessary
+            if not isinstance(target, torch.Tensor):
+                target = target[0]
+
             input_paths = random.choices([p[0] for p in self.samples if p != target_path and class_type in p], k=self.k)
             assert len(input_paths) == self.k # I think it may do this by default...
             samples = torch.stack([torch.from_numpy(self.processor(self.loader(i)).data['pixel_values'][0]) for i in input_paths])
+            
+            drop_mask = torch.rand(samples.shape[0],) < .2
+            samples[drop_mask] = 0
+
+            print(target_path)
+
+            drop_whole_set_mask = torch.rand(1,) < .1
+            if drop_whole_set_mask:
+                samples = torch.zeros_like(samples)
+            return {'samples': samples[:, :3], 'target': target[:3]}
         except Exception as e:
-            logging.warning('getitem issue ', e)
-            samples, target = None, None
+            logging.warning(f'getitem error: {e}')
+            logging.warning(f'Target: {target}')
+            
+            return None, None
 
-        drop_mask = torch.rand(samples.shape[0],) < .2
-        samples[drop_mask] = 0
-
-        drop_whole_set_mask = torch.rand(1,) < .1
-        if drop_whole_set_mask:
-            samples = torch.zeros_like(samples)
-        return {'samples': samples[:, :3], 'target': target[:3]}
 
     def __getitem__(self, index: int):
         return self.safe_getitem(index)

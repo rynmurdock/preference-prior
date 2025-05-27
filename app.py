@@ -11,27 +11,17 @@ from model import get_model_and_tokenizer
 model, model.prior_pipe.image_encoder = get_model_and_tokenizer(config.model_path, 
                                                                 'cuda', torch.bfloat16)
 
-
-
 # TODO unify/merge origin and this
 # TODO save & restart from (if it exists) dataframe parquet
 
-# lol
-DEVICE = 'cuda'
-STEPS = 8
-output_hidden_state = False
 device = "cuda"
-dtype = torch.bfloat16
 
 
 import spaces
-
 import matplotlib.pyplot as plt
-import logging
 
 import os
 import gradio as gr
-import numpy as np
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -98,6 +88,7 @@ def generate(in_im_embs, ):
 
 #######################
 
+@spaces.GPU()
 def sample_embs(prompt_embeds):
     latent = torch.randn(prompt_embeds.shape[0], 1, prompt_embeds.shape[-1])
     if prompt_embeds.shape[1] < 8: # TODO grab as `k` arg from config
@@ -107,6 +98,7 @@ def sample_embs(prompt_embeds):
 
     return image_embeds
 
+@spaces.GPU()
 def get_user_emb(embs, ys):
     positives = [e for e, ys in zip(embs, ys) if ys == 1]
     embs = random.sample(positives, min(8, len(positives)))
@@ -218,7 +210,7 @@ def next_image(calibrate_prompts, user_id):
 
 def start(_, calibrate_prompts, user_id, request: gr.Request):
     user_id = int(str(time.time())[-7:].replace('.', ''))
-    image, calibrate_prompts  = next_image(calibrate_prompts, user_id)
+    image, calibrate_prompts = next_image(calibrate_prompts, user_id)
     return [
             gr.Button(value='👍', interactive=True), 
             gr.Button(value='Neither (Space)', interactive=True, visible=False), 
