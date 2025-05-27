@@ -119,16 +119,12 @@ class ImageFolderSample(torchvision.datasets.ImageFolder):
             drop_mask = torch.rand(samples.shape[0],) < .2
             samples[drop_mask] = 0
 
-            print(target_path)
-
             drop_whole_set_mask = torch.rand(1,) < .1
             if drop_whole_set_mask:
                 samples = torch.zeros_like(samples)
             return {'samples': samples[:, :3], 'target': target[:3]}
         except Exception as e:
-            logging.warning(f'getitem error: {e}')
-            logging.warning(f'Target: {target}')
-            
+            logging.warning(f'getitem error: {e}')            
             return None, None
 
 
