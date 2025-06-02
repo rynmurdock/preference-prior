@@ -3,6 +3,8 @@ from PIL import Image
 import random
 import logging
 import torchvision
+import os
+import glob
 
 import torchvision.transforms as T
 from torchvision.transforms.functional import InterpolationMode
@@ -115,18 +117,10 @@ class ImageFolderSample(torchvision.datasets.ImageFolder):
             input_paths = random.choices([p[0] for p in self.samples if p != target_path and class_type in p], k=self.k)
             assert len(input_paths) == self.k # I think it may do this by default...
             samples = torch.stack([torch.from_numpy(self.processor(self.loader(i)).data['pixel_values'][0]) for i in input_paths])
-            
-            drop_mask = torch.rand(samples.shape[0],) < .2
-            samples[drop_mask] = 0
-
-            drop_whole_set_mask = torch.rand(1,) < .1
-            if drop_whole_set_mask:
-                samples = torch.zeros_like(samples)
             return {'samples': samples[:, :3], 'target': target[:3]}
         except Exception as e:
             logging.warning(f'getitem error: {e}')            
-            return None, None
-
+            return self.__getitem__(random.randint(0, len(self)-1))
 
     def __getitem__(self, index: int):
         return self.safe_getitem(index)
@@ -134,19 +128,58 @@ class ImageFolderSample(torchvision.datasets.ImageFolder):
 
 # https://data.mendeley.com/datasets/fs4k2zc5j5/3
 # Gomez, J. C., Ibarra-Manzano, M. A., & Almanza-Ojeda, D. L. (2017). User Identification in Pinterest Through the Refinement of Cascade Fusion of Text and Images. Research in Computing Science, 144, 41-52.
-def get_dataset(data_path, processor):
-    return ImageFolderSample(data_path, 8, processor)
+def get_dataset(data_path, processor, k):
+    return ImageFolderSample(data_path, k, processor,)
 
 
-def get_dataloader(data_path, batch_size, num_workers, processor):
-    dataloader = torch.utils.data.DataLoader(
-                                            get_dataset(data_path, processor=processor), 
+def is_dir_empty(path):
+    with os.scandir(path) as scan:
+        return next(scan, None) is None
+
+# clean up any empty directories
+def remove_empty_dirs(path_to_folders):
+    folders = glob.glob(f'{path_to_folders}/*')
+    for f in folders:
+        if os.path.isdir(f) and is_dir_empty(f):
+            os.rmdir(f)
+
+def get_dataloader(data_path, batch_size, num_workers, processor, k):
+    n_val_groups = 4
+    val_batch_size = 64
+
+    # we can die if we don't clean empty folders.
+    remove_empty_dirs(data_path)
+    
+    full_data = get_dataset(data_path, processor=processor, k=k)
+
+    # subset specific "classes" (subfolders that contain groups of preferred images)
+    val_classes = random.sample(full_data.classes, k=n_val_groups)
+    val_class_indices = []
+    for cl in val_classes:
+        val_class_indices.append(full_data.class_to_idx[cl])
+    val_indices = [ind for ind, i in enumerate(full_data.samples) if i[1] in val_class_indices]
+
+    train_indices = [i for i in range(len(full_data)) if i not in val_indices]
+    train_data = torch.utils.data.Subset(full_data, train_indices)
+    val_data = torch.utils.data.Subset(full_data, val_indices)
+
+
+    train_dataloader = torch.utils.data.DataLoader(
+                                            train_data, 
                                             num_workers=num_workers, 
                                             collate_fn=my_collate, 
                                             batch_size=batch_size, 
                                             shuffle=True, 
                                             drop_last=True
                                             )
-    return dataloader
+    assert len(val_indices) >= val_batch_size
+    val_dataloader = torch.utils.data.DataLoader(
+                                            val_data, 
+                                            num_workers=num_workers, 
+                                            collate_fn=my_collate, 
+                                            batch_size=val_batch_size, 
+                                            drop_last=True
+                                            )
+    return train_dataloader, val_dataloader
 
 

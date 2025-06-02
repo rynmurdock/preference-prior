@@ -3,3 +3,5 @@ __pycache__/
 *.pt
 *.safetensors
 last_epoch_ckpt/
+*.json
+.gradio/

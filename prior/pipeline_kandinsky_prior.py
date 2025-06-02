@@ -401,6 +401,7 @@ class KandinskyPriorPipeline(DiffusionPipeline):
     def __call__(
         self,
         prompt: Union[str, List[str]],
+        k,
         negative_prompt: Optional[Union[str, List[str]]] = None,
         num_images_per_prompt: int = 1,
         num_inference_steps: int = 25,
@@ -471,11 +472,11 @@ class KandinskyPriorPipeline(DiffusionPipeline):
                 prompt_embeds = torch.cat(full_seq, 0)
             full_prompt.append(prompt_embeds)
         prompt_embeds = torch.stack(full_prompt)
-        if prompt_embeds.shape[1] < 8: # TODO grab as `k` arg from config
-            prompt_embeds = torch.nn.functional.pad(prompt_embeds, [0, 0, 0, 8-prompt_embeds.shape[1]])
-        assert prompt_embeds.shape[1] == 8, f"The model is set to take `k`` cond image embeds but is shape {prompt_embeds.shape}"
+        if prompt_embeds.shape[1] < k:
+            prompt_embeds = torch.nn.functional.pad(prompt_embeds, [0, 0, 0, k-prompt_embeds.shape[1]])
+        assert prompt_embeds.shape[1] == k, f"The model is set to take `k`` cond image embeds but is shape {prompt_embeds.shape}"
 
-        prompt_embeds = prompt_embeds.to('cuda') # TODO set with `k` arg from config
+        prompt_embeds = prompt_embeds.to('cuda')
 
         hidden_states = torch.randn(
             (batch_size, prompt_embeds.shape[-1]),
@@ -495,7 +496,25 @@ class KandinskyPriorPipeline(DiffusionPipeline):
 
         # if negative prompt has been defined, we retrieve split the image embedding into two
         if negative_prompt is None:
-            zero_embeds = self.get_zero_embed(latents.shape[0], device=latents.device)
+            # zero_embeds = self.get_zero_embed(latents.shape[0], device=latents.device)
+
+            # using the same hidden states or different hidden states?
+            
+            hidden_states = torch.randn(
+                (batch_size, prompt_embeds.shape[-1]),
+                device=prompt_embeds.device,
+                dtype=prompt_embeds.dtype,
+                generator=generator,
+            )
+
+            latents = self.prior(
+                hidden_states,
+                proj_embedding=torch.zeros_like(prompt_embeds),
+                encoder_hidden_states=torch.zeros_like(prompt_embeds),
+                attention_mask=text_mask,
+            ).predicted_image_embedding
+
+            zero_embeds = latents
 
             if (
                 hasattr(self, "final_offload_hook")
