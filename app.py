@@ -59,7 +59,7 @@ def generate_gpu(in_im_embs, prompt='the scene'):
             num_inference_steps=50,
             image_embeds=positive_image_embeds,
             negative_image_embeds=negative_image_embeds,
-            guidance_scale=11,
+            guidance_scale=18,
         ).images[0]
         cond = (
                     model.prior_pipe.image_processor(images, return_tensors="pt")

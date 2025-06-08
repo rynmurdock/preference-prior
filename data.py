@@ -145,7 +145,7 @@ def remove_empty_dirs(path_to_folders):
 
 def get_dataloader(data_path, batch_size, num_workers, processor, k):
     n_val_groups = 4
-    val_batch_size = 64
+    val_batch_size = batch_size
 
     # we can die if we don't clean empty folders.
     remove_empty_dirs(data_path)
