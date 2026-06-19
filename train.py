@@ -10,6 +10,7 @@ import logging
 import numpy as np
 from tqdm import tqdm
 from PIL import Image
+import os
 
 import matplotlib
 matplotlib.use('Agg')
@@ -29,7 +30,8 @@ def main():
 
     model, tokenizer = get_model_and_tokenizer(config.model_path, config.device, config.dtype)
     optimizer = get_optimizer(list(model.prior.parameters()), config.lr)
-    dataloader, val_dataloader = get_dataloader(config.data_path, config.batch_size, config.num_workers, 
+    dataloader, val_dataloader = get_dataloader(config.data_path, config.val_data_path,
+                                                 config.batch_size, config.num_workers, 
                                 model.prior_pipe.image_processor, k=config.k)
     
     train_losses = []
@@ -41,37 +43,39 @@ def main():
             if batch is None:
                 continue
 
-            input, target = batch
+            input, input_scores, target, target_scores = batch
             input = input.to(config.device)
             target = target.to(config.device)
 
             if ind % 50 == 0:
-                with torch.cuda.amp.autocast(enabled=True, dtype=config.dtype): # NOTE using autocast because our training model is also our val model, so don't want to set to full half precision.
+                # NOTE autocasting because our fp32 training model is also our val model; only want calculations in half.
+                with torch.autocast(enabled=True, device_type='cuda', dtype=config.dtype): 
+                    # TODO make this not brittle
                     examples = [
                         # '../generative_recommender/Blue_Tigers_space/1o.png',
- '../generative_recommender/Blue_Tigers_space/2o.png',
+ '../../generative_recommender/Blue_Tigers_space/2o.png',
 #  '../generative_recommender/Blue_Tigers_space/3o.png',
 #  '../generative_recommender/Blue_Tigers_space/4o.png',
 #  '../generative_recommender/Blue_Tigers_space/5o.png',
- '../generative_recommender/Blue_Tigers_space/10o.png',
- '../generative_recommender/Blue_Tigers_space/7o.png',
- '../generative_recommender/Blue_Tigers_space/9o.png',
+ '../../generative_recommender/Blue_Tigers_space/10o.png',
+ '../../generative_recommender/Blue_Tigers_space/7o.png',
+ '../../generative_recommender/Blue_Tigers_space/9o.png',
  ]
-                    model.do_qual_val([[Image.open('../'+j) for j in examples]], k=config.k)
+                    assert all([os.path.exists(a) for a in examples]), f'{all([os.path.exists(a) for a in examples])=}'
+                    model.do_qual_val([[Image.open(j) for j in examples]], k=config.k)
                     val_loss = model.do_quant_val(val_dataloader)
                     validation_losses.append(val_loss)
                     if len(inner_train_losses) > 0:
                         train_losses.append(sum(inner_train_losses)/len(inner_train_losses))
                         inner_train_losses = []
 
-
-                    if len(train_losses) > 0:
-                        plt.plot(train_losses)
+                    train_losses = train_losses
+                    plt.plot(train_losses)
                     plt.plot(validation_losses)
                     plt.savefig('latest_loss_curves.png')
                     plt.clf()
 
-            loss = get_loss(model, input, target, tokenizer)
+            loss = get_loss(model, input, target, tokenizer, scores=input_scores, target_scores=target_scores)
             inner_train_losses.append(loss.item())
             loss.backward()
             optimizer.step()

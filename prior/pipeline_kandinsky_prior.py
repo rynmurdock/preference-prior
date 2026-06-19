@@ -450,11 +450,6 @@ class KandinskyPriorPipeline(DiffusionPipeline):
             [`KandinskyPriorPipelineOutput`] or `tuple`
         """
 
-        # if the negative prompt is defined we double the batch size to
-        # directly retrieve the negative prompt embedding
-        if negative_prompt is not None:
-            prompt = prompt + negative_prompt
-            negative_prompt = 2 * negative_prompt
 
         device = self._execution_device
 
@@ -485,11 +480,19 @@ class KandinskyPriorPipeline(DiffusionPipeline):
             generator=generator,
         )
 
+        scores = torch.full((hidden_states.shape[0], 1+prompt_embeds.shape[1]), 5)
+        # if negative_prompt:
+        # actually can be any scores for the input; target only matters
+        # TODO will accumulate from our scores after awhile anyways
+        scores = torch.full((hidden_states.shape[0], 1+prompt_embeds.shape[1]), 5)
+        neg = torch.full((hidden_states.shape[0], 1+prompt_embeds.shape[1]), 1)
+        scores = torch.cat([scores, neg], 0)
+
         latents = self.prior(
             hidden_states,
             proj_embedding=prompt_embeds,
-            encoder_hidden_states=prompt_embeds,
             attention_mask=text_mask,
+            scores=scores
         ).predicted_image_embedding
 
         image_embeddings = latents
@@ -510,8 +513,8 @@ class KandinskyPriorPipeline(DiffusionPipeline):
             latents = self.prior(
                 hidden_states,
                 proj_embedding=torch.zeros_like(prompt_embeds),
-                encoder_hidden_states=torch.zeros_like(prompt_embeds),
                 attention_mask=text_mask,
+                scores=neg
             ).predicted_image_embedding
 
             zero_embeds = latents

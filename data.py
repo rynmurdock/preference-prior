@@ -5,6 +5,7 @@ import logging
 import torchvision
 import os
 import glob
+import json
 
 import torchvision.transforms as T
 from torchvision.transforms.functional import InterpolationMode
@@ -91,35 +92,79 @@ def my_collate(batch):
         targets = torch.stack([s['target'] for s in batch])
         samples = torch.stack([s['samples'] for s in batch])
 
-        # targets = torch.stack([s['target'] for s in batch if s is not None])
-        # samples = torch.stack([s['samples'] for s in batch if s is not None])
+        target_scores = torch.stack([torch.tensor(s['sample_scores']) 
+                                                  for s in batch])
+        sample_scores = torch.stack([torch.tensor(s['target_scores']) 
+                                                  for s in batch])
+
     except Exception as e:
       logging.warning('my_collate issue ', e)
       return None
-    return samples, targets
+    return samples, sample_scores, targets, target_scores
 
+def process_json_to_dicts(json_data):
+    pids_to_each_path_and_score = {}
+    for s in json_data:
+        # if we don't already have the participant's list of (image, score)s,
+        #   let's add it
+        if not pids_to_each_path_and_score.get(s['participant_id'], False):
+            pids_to_each_path_and_score[s['participant_id']] = [(s['image_path'],
+                                                        int(s['original_score']))]
+        # otherwise, continue adding to their list
+        else:
+            pids_to_each_path_and_score[s['participant_id']] += [(s['image_path'],
+                                                        int(s['original_score']))]
+    return [v for v in pids_to_each_path_and_score.values()]
 
-class ImageFolderSample(torchvision.datasets.ImageFolder):
-    def __init__(self, data_path, k, processor):
-        super().__init__(data_path)
+class ImageFolderSample(torch.utils.data.Dataset):
+    def __init__(self, data_path, k, processor,):
+        super().__init__()
         self.k = k
         self.processor = processor
 
+        with open(data_path) as jsfile:
+            self.json_data = json.load(jsfile)
+        self.samples = process_json_to_dicts(self.json_data)
+
+        self.data_path = os.path.dirname(data_path)
+
+
+    def loader(self, img_p):
+        im = Image.open(img_p)
+        return im
+
+    def __len__(self):
+        return len(self.samples)
+
     def safe_getitem(self, index):
         try:
-            target_path, class_type = self.samples[index]
-            target = torch.from_numpy(self.processor(self.loader(target_path)).data['pixel_values'][0])
+            sample = self.samples[index]
+            # sample k indices from user's ratings & one separate target
+
+            # preferred_inds = [i for i in range(len(sample)) if sample[i][1] > 3]
+
+            pid_target = random.choice(range(len(sample)))
+            pid_cond_subset = random.sample([i for i in 
+                                        range(len(sample)) 
+                                        if i != pid_target], self.k)
+
+            target_path = sample[pid_target][0]
+            target_score = int(sample[pid_target][1])
+            # path set for PAMELA data relative to root
+            target = self.processor(self.loader(
+                f'{self.data_path}/../'+target_path)).data['pixel_values'][0]
 
             # not sure why this is necessary
             if not isinstance(target, torch.Tensor):
                 target = target[0]
 
-            input_paths = random.choices([p[0] for p in self.samples if p != target_path and class_type in p], k=self.k)
-            assert len(input_paths) == self.k # I think it may do this by default...
-            samples = torch.stack([torch.from_numpy(self.processor(self.loader(i)).data['pixel_values'][0]) for i in input_paths])
-            return {'samples': samples[:, :3], 'target': target[:3]}
+            assert len(pid_cond_subset) == self.k
+            input_paths = [sample[i][0] for i in pid_cond_subset]
+            input_scores = [int(sample[i][1]) for i in pid_cond_subset]
+            samples = torch.stack([self.processor(self.loader(f'{self.data_path}/../'+i)).data['pixel_values'][0] for i in input_paths])
+            return {'samples': samples[:, :3], 'target': target[:3], 'sample_scores':input_scores, 'target_scores': [target_score]}
         except Exception as e:
-            logging.warning(f'getitem error: {e}')            
+            logging.warning(f'getitem error: {e}')
             return self.__getitem__(random.randint(0, len(self)-1))
 
     def __getitem__(self, index: int):
@@ -143,26 +188,27 @@ def remove_empty_dirs(path_to_folders):
         if os.path.isdir(f) and is_dir_empty(f):
             os.rmdir(f)
 
-def get_dataloader(data_path, batch_size, num_workers, processor, k):
-    n_val_groups = 4
+def get_dataloader(data_path, val_data_path, 
+                   batch_size, num_workers, processor, k):
     val_batch_size = batch_size
 
     # we can die if we don't clean empty folders.
     remove_empty_dirs(data_path)
     
-    full_data = get_dataset(data_path, processor=processor, k=k)
+    train_data = get_dataset(data_path, processor=processor, k=k)
+    val_data = get_dataset(val_data_path, processor=processor, k=k)
 
-    # subset specific "classes" (subfolders that contain groups of preferred images)
-    val_classes = random.sample(full_data.classes, k=n_val_groups)
-    val_class_indices = []
-    for cl in val_classes:
-        val_class_indices.append(full_data.class_to_idx[cl])
-    val_indices = [ind for ind, i in enumerate(full_data.samples) if i[1] in val_class_indices]
+    # with pamela data, we have separate train/val sets
+    # # subset specific "classes" (subfolders that contain groups of preferred images)
+    # val_classes = random.sample(full_data.classes, k=n_val_groups)
+    # val_class_indices = []
+    # for cl in val_classes:
+    #     val_class_indices.append(full_data.class_to_idx[cl])
+    # val_indices = [ind for ind, i in enumerate(full_data.samples) if i[1] in val_class_indices]
 
-    train_indices = [i for i in range(len(full_data)) if i not in val_indices]
-    train_data = torch.utils.data.Subset(full_data, train_indices)
-    val_data = torch.utils.data.Subset(full_data, val_indices)
-
+    # train_indices = [i for i in range(len(full_data)) if i not in val_indices]
+    # train_data = torch.utils.data.Subset(full_data, train_indices)
+    # val_data = torch.utils.data.Subset(full_data, val_indices)
 
     train_dataloader = torch.utils.data.DataLoader(
                                             train_data, 
@@ -172,7 +218,7 @@ def get_dataloader(data_path, batch_size, num_workers, processor, k):
                                             shuffle=True, 
                                             drop_last=True
                                             )
-    assert len(val_indices) >= val_batch_size
+
     val_dataloader = torch.utils.data.DataLoader(
                                             val_data, 
                                             num_workers=num_workers, 

@@ -7,15 +7,18 @@ import config
 from prior.pipeline_kandinsky_prior import KandinskyPriorPipeline
 from prior.prior_transformer import PriorTransformer
 
-def get_loss(model, input, target, tokenizer):
+def get_loss(model, input, target, tokenizer, **kwargs):
     with torch.no_grad():
         assert len(input.shape) == 5 # [batch, s, c, w, h]
         cuts = config.number_k_clip_embed
         assert input.shape[0] * input.shape[1] % cuts == 0, 'batch size * `k` preferred embeds must be divisible by cuts'
         input = input.view(cuts//config.k, -1, 3, target.shape[-2], target.shape[-1])
+
+        # TODO vectorize
         full_seq = []
         for b in input:
-            input = tokenizer(b)['image_embeds'] # in our case, tokenizer is a clip embedding model
+            # in our case, tokenizer is a clip embedding model
+            input = tokenizer(b)['image_embeds']
             # rng drop out embeddings
             drop_mask = torch.rand(input.shape[0],) < .7
             input[drop_mask] = 0
@@ -32,9 +35,11 @@ def get_loss(model, input, target, tokenizer):
         input = input.view(target.shape[0], -1, target.shape[-1])
         assert len(input.shape) == 3 # [batch, sequence, inner]
     
-    with torch.cuda.amp.autocast(enabled=True, dtype=config.dtype):
+    with torch.autocast(device_type='cuda', enabled=True, dtype=config.dtype):
         latent = torch.randn(input.shape[0], input.shape[-1], device=input.device)
-        output = model(latent, input).predicted_image_embedding
+        # TODO use latent's rope to specify whether emb is high/low scoring;
+        #    i.e., don't only predict preferred embs
+        output = model(latent, input, scores=kwargs['scores'], target_scores=kwargs['target_scores']).predicted_image_embedding
 
     output = output.to(torch.float32)
     target = target.to(torch.float32)
@@ -53,7 +58,6 @@ def get_loss(model, input, target, tokenizer):
     loss =  mse_loss + .1 * cosine_loss
 
     logging.info(f'MSE: {mse_loss.item()}, Cosine: {cosine_loss.item()}, Weighted Total: {loss.item()}')
-    # TODO wandb
     return loss
 
 
@@ -67,14 +71,19 @@ class Zoo(torch.nn.Module):
         # NOTE we may get better perf from freezing our prior 
         #     and only training a transformer adapter?
 
-    def forward(self, latents, preferred_embeds):
-        pred = self.prior(latents, preferred_embeds)
+    def forward(self, latent, input, **kwargs):
+        # TODO unnecessary intermediates here.
+        # all beloved images
+        latent = latent.to('cuda')
+        input = input.to('cuda')
+        pred = self.prior(latent, input, scores=kwargs['scores'], target_scores=kwargs['target_scores'], )
         return pred
     
     @torch.no_grad()
     def do_qual_val(self, images, k):
         generator = torch.Generator(device="cpu").manual_seed(787)
         # NOTE if you use diffusion at some point, could set seed.
+        # TODO must setup giving scores now that we have them.
         image_embeds, negative_image_embeds = self.prior_pipe(images, k=k).to_tuple()
         images = self.kandinsky_pipe(
             num_inference_steps=50,
@@ -92,16 +101,15 @@ class Zoo(torch.nn.Module):
             if batch is None:
                 continue
 
-            input, target = batch
+            input, input_scores, target, target_scores = batch
             input = input.to(config.device)
             target = target.to(config.device)
-            loss = get_loss(self, input, target, self.prior_pipe.image_encoder)
+            loss = get_loss(self, input, target, self.prior_pipe.image_encoder, scores=input_scores, target_scores=target_scores)
             losses.append(loss.item())
         return sum(losses) / len(losses)
     
 def get_model_and_tokenizer(path, device, dtype):
-    prior = PriorTransformer.from_pretrained("ECLIPSE-Community/ECLIPSE_KandinskyV22_Prior" 
-                                             if path is None else path).to(device)
+    prior = PriorTransformer().to(device)
         
     pipe_prior = KandinskyPriorPipeline.from_pretrained("kandinsky-community/kandinsky-2-2-prior", prior=prior).to(device)
     pipe_prior.image_encoder = pipe_prior.image_encoder.to(device, dtype)

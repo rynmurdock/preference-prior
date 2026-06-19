@@ -4,7 +4,7 @@ sys.path.append("..")
 from dataclasses import dataclass
 from typing import Dict, Optional, Union
 
-
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -12,10 +12,202 @@ from torch import nn
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.utils import BaseOutput
 from diffusers.models.attention import BasicTransformerBlock
-from diffusers.models.attention_processor import AttentionProcessor, AttnProcessor
+from diffusers.models.attention_processor import AttentionProcessor
 from diffusers.models.embeddings import TimestepEmbedding, Timesteps
 from diffusers.models.modeling_utils import ModelMixin
 
+
+
+class AttnProcessor:
+    r"""
+    Default processor for performing attention-related computations.
+    """
+
+    def __call__(
+        self,
+        attn,
+        hidden_states: torch.Tensor,
+        encoder_hidden_states: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        temb: torch.Tensor | None = None,
+        *args,
+        **kwargs,
+    ) -> torch.Tensor:
+        if len(args) > 0 or kwargs.get("scale", None) is not None:
+            deprecation_message = "The `scale` argument is deprecated and will be ignored. Please remove it, as passing it will raise an error in the future. `scale` should directly be passed while calling the underlying pipeline component i.e., via `cross_attention_kwargs`."
+
+        residual = hidden_states
+
+        if attn.spatial_norm is not None:
+            hidden_states = attn.spatial_norm(hidden_states, temb)
+
+        input_ndim = hidden_states.ndim
+
+        if input_ndim == 4:
+            batch_size, channel, height, width = hidden_states.shape
+            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+
+        batch_size, sequence_length, _ = (
+            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+        )
+        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+
+        if attn.group_norm is not None:
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+
+        query = attn.to_q(hidden_states)
+
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+        elif attn.norm_cross:
+            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+
+        query = attn.head_to_batch_dim(query)
+        key = attn.head_to_batch_dim(key)
+        value = attn.head_to_batch_dim(value)
+
+        if 'rope_emb' in kwargs.keys():
+            query = apply_rotary_emb(query, kwargs['rope_emb'])
+            key = apply_rotary_emb(key, kwargs['rope_emb'])
+
+        # attention_probs = attn.get_attention_scores(query, key, attention_mask)
+        # hidden_states = torch.bmm(attention_probs, value)
+        # hidden_states = attn.batch_to_head_dim(hidden_states)
+
+        hidden_states = F.scaled_dot_product_attention(
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+        )
+        hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, residual.shape[1])
+
+
+        # linear proj
+        hidden_states = attn.to_out[0](hidden_states)
+        # dropout
+        hidden_states = attn.to_out[1](hidden_states)
+
+        if input_ndim == 4:
+            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+
+        if attn.residual_connection:
+            hidden_states = hidden_states + residual
+
+        hidden_states = hidden_states / attn.rescale_output_factor
+
+        return hidden_states
+
+
+
+def apply_rotary_emb(
+    x: torch.Tensor,
+    freqs_cis: torch.Tensor | tuple[torch.Tensor],
+    sequence_dim: int = 1,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Apply rotary embeddings to input tensors using the given frequency tensor. This function applies rotary embeddings
+    to the given query or key 'x' tensors using the provided frequency tensor 'freqs_cis'. The input tensors are
+    reshaped as complex numbers, and the frequency tensor is reshaped for broadcasting compatibility. The resulting
+    tensors contain rotary embeddings and are returned as real tensors.
+
+    Args:
+        x (`torch.Tensor`):
+            Query or key tensor to apply rotary embeddings. [B, H, S, D] xk (torch.Tensor): Key tensor to apply
+        freqs_cis (`tuple[torch.Tensor]`): Precomputed frequency tensor for complex exponentials. ([S, D], [S, D],)
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor]: tuple of modified query tensor and key tensor with rotary embeddings.
+    """
+    cos, sin = freqs_cis  # [B, S, D]
+    # modified to add a batch dim
+    if sequence_dim == 2:
+        cos = cos[:, None, None, :, :]
+        sin = sin[:, None, None, :, :]
+    elif sequence_dim == 1:
+        cos = cos[:, None, :, None, :]
+        sin = sin[:, None, :, None, :]
+    else:
+        raise ValueError(f"`sequence_dim={sequence_dim}` but should be 1 or 2.")
+
+    cos, sin = cos.to(x.device), sin.to(x.device)
+
+    # Used for flux, cogvideox, hunyuan-dit
+    x_real, x_imag = x.reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, H, S, D//2]
+    x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(3)
+
+    out = (x.float() * cos + x_rotated.float() * sin).to(x.dtype)
+
+    return out
+
+
+def get_1d_rotary_pos_embed(
+    dim: int,
+    pos: np.ndarray | int,
+    theta: float = 10000.0,
+    linear_factor=1.0,
+    ntk_factor=1.0,
+    freqs_dtype=torch.float32,  #  torch.float32, torch.float64 (flux)
+):
+    '''
+    Precompute the frequency tensor for complex exponentials (cis) with given dimensions.
+    '''
+
+    assert dim % 2 == 0
+
+    if isinstance(pos, int):
+        pos = torch.arange(pos)
+    if isinstance(pos, np.ndarray):
+        pos = torch.from_numpy(pos)  # type: ignore  # [S]
+
+    theta = theta * ntk_factor
+    freqs = (
+        1.0 / (theta ** (torch.arange(0, dim, 2, dtype=freqs_dtype, device=pos.device) / dim)) / linear_factor
+    )  # [D/2]
+    freqs = torch.outer(pos, freqs)  # type: ignore   # [S, D/2]
+
+    freqs_cos = freqs.cos().repeat_interleave(2, dim=1, output_size=freqs.shape[1] * 2).float()  # [S, D]
+    freqs_sin = freqs.sin().repeat_interleave(2, dim=1, output_size=freqs.shape[1] * 2).float()  # [S, D]
+    return freqs_cos, freqs_sin
+
+
+class FluxPosEmbed(nn.Module):
+    # modified from https://github.com/black-forest-labs/flux/blob/c00d7c60b085fce8058b9df845e036090873f2ce/src/flux/modules/layers.py#L11
+    def __init__(self, theta: int, axes_dim: list[int]):
+        super().__init__()
+        self.theta = theta
+        self.axes_dim = axes_dim
+
+    def forward(self, ids: torch.Tensor) -> torch.Tensor:
+        n_axes = ids.shape[-1]
+        pos = ids.float()
+        # batch
+        ba_cos_out = []
+        ba_sin_out = []
+        for b in range(len(ids)):
+            cos_out = []
+            sin_out = []
+            for i in range(n_axes):
+                cos, sin = get_1d_rotary_pos_embed(
+                    self.axes_dim[i],
+                    pos[b, :, i,],
+                    theta=self.theta,
+                    freqs_dtype=torch.float32,
+                )
+                cos_out.append(cos)
+                sin_out.append(sin)
+            freqs_cos = torch.cat(cos_out, dim=-1).to(ids.device)
+            freqs_sin = torch.cat(sin_out, dim=-1).to(ids.device)
+            ba_cos_out.append(freqs_cos)
+            ba_sin_out.append(freqs_sin)
+        fin_freqs_cos = torch.stack(ba_cos_out, dim=0).to(ids.device)
+        fin_freqs_sin = torch.stack(ba_sin_out, dim=0).to(ids.device)
+        
+        sh = fin_freqs_sin.shape
+        assert sh[0] == ids.shape[0], f'{ids.shape=} {sh=}'
+        assert len(sh) == 3, f'{sh=}'
+        
+        return fin_freqs_cos, fin_freqs_sin
 
 @dataclass
 class PriorTransformerOutput(BaseOutput):
@@ -70,12 +262,12 @@ class PriorTransformer(ModelMixin, ConfigMixin):
     @register_to_config
     def __init__(
         self,
-        num_attention_heads: int = 32,
+        num_attention_heads: int = 20,
         attention_head_dim: int = 64,
-        num_layers: int = 20,
-        embedding_dim: int = 768,
+        num_layers: int = 32,
+        embedding_dim: int = 1280,
         num_embeddings=77,
-        additional_embeddings=3,  # as we have remvoed the time embedding
+        additional_embeddings=3, # as we have removed the time embedding
         dropout: float = 0.0,
         # time_embed_act_fn: str = "silu",
         norm_in_type: Optional[str] = None,  # layer
@@ -118,6 +310,9 @@ class PriorTransformer(ModelMixin, ConfigMixin):
             raise ValueError(f"unsupported encoder_hid_proj_type: {encoder_hid_proj_type}")
 
         self.positional_embedding = nn.Parameter(torch.zeros(1, num_embeddings + additional_embeddings, inner_dim))
+
+        # separate rope embedding for scores over embeddings
+        self.rope_embed_layer = FluxPosEmbed(1000, [inner_dim])
 
         if added_emb_type == "prd":
             self.prd_embedding = nn.Parameter(torch.zeros(1, 1, inner_dim))
@@ -238,6 +433,8 @@ class PriorTransformer(ModelMixin, ConfigMixin):
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
         attention_mask: Optional[torch.BoolTensor] = None,
         return_dict: bool = True,
+        scores=None,
+        target_scores=None,
     ):
         """
         The [`PriorTransformer`] forward method.
@@ -263,6 +460,7 @@ class PriorTransformer(ModelMixin, ConfigMixin):
                 tuple is returned where the first element is the sample tensor.
         """
         batch_size = hidden_states.shape[0]
+        assert encoder_hidden_states == None, 'not using this'
 
         # timesteps = timestep
         # if not torch.is_tensor(timesteps):
@@ -338,6 +536,19 @@ class PriorTransformer(ModelMixin, ConfigMixin):
 
         hidden_states = hidden_states + positional_embeddings[:, :hidden_states.shape[1]]
 
+        if target_scores is not None:
+            scores = torch.cat([target_scores, scores], dim=-1)
+        
+        # append for additional states
+        prd_ids = scores.new_zeros((scores.shape[0], 1))
+        scores = torch.cat([scores, prd_ids], 1)
+
+        # same range as timesteps; better bet of similar functioning 
+        #   than changing theta
+        pref_ids = scores.unsqueeze(-1) * 200
+        assert pref_ids.shape[1] == hidden_states.shape[1], f'{hidden_states.shape=} should == {pref_ids.shape=}'
+        rope_emb = self.rope_embed_layer(pref_ids)
+
         if attention_mask is not None:
             attention_mask = (1 - attention_mask.to(hidden_states.dtype)) * -10000.0
             attention_mask = F.pad(attention_mask, (0, self.additional_embeddings), value=0.0)
@@ -348,7 +559,8 @@ class PriorTransformer(ModelMixin, ConfigMixin):
             hidden_states = self.norm_in(hidden_states)
 
         for block in self.transformer_blocks:
-            hidden_states = block(hidden_states, attention_mask=attention_mask)
+            hidden_states = block(hidden_states, attention_mask=attention_mask,
+                                  added_cond_kwargs={'rope_emb':rope_emb})
 
         hidden_states = self.norm_out(hidden_states)
 
