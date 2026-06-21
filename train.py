@@ -17,7 +17,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from data import get_dataloader
-from model import get_model_and_tokenizer, get_optimizer, get_loss
+from model import get_model_and_tokenizer, get_optimizer_and_lr_sched, get_loss
 import config
 
 
@@ -29,7 +29,8 @@ def main():
     torch.manual_seed(config.seed)
 
     model, tokenizer = get_model_and_tokenizer(config.model_path, config.device, config.dtype)
-    optimizer = get_optimizer(list(model.prior.parameters()), config.lr)
+    optimizer, lr_sched = get_optimizer_and_lr_sched(list(model.prior.parameters()), 
+                                                     config.lr)
     dataloader, val_dataloader = get_dataloader(config.data_path, config.val_data_path,
                                                  config.batch_size, config.num_workers, 
                                 model.prior_pipe.image_processor, k=config.k)
@@ -75,11 +76,12 @@ def main():
                     plt.savefig('latest_loss_curves.png')
                     plt.clf()
 
+            optimizer.zero_grad()
             loss = get_loss(model, input, target, tokenizer, scores=input_scores, target_scores=target_scores)
             inner_train_losses.append(loss.item())
             loss.backward()
             optimizer.step()
-            optimizer.zero_grad()
+            lr_sched.step()
 
             if ind % 100 == 0:
                 # TODO add loading from path

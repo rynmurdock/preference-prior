@@ -11,28 +11,26 @@ def get_loss(model, input, target, tokenizer, **kwargs):
     with torch.no_grad():
         assert len(input.shape) == 5 # [batch, s, c, w, h]
         cuts = config.number_k_clip_embed
+        assert cuts < config.k * config.batch_size
         assert input.shape[0] * input.shape[1] % cuts == 0, 'batch size * `k` preferred embeds must be divisible by cuts'
-        input = input.view(cuts//config.k, -1, 3, target.shape[-2], target.shape[-1])
+        input = input.view(cuts, -1, 3, target.shape[-2], target.shape[-1])
 
-        # TODO vectorize
         full_seq = []
         for b in input:
             # in our case, tokenizer is a clip embedding model
             input = tokenizer(b)['image_embeds']
-            # rng drop out embeddings
-            drop_mask = torch.rand(input.shape[0],) < .7
-            input[drop_mask] = 0
-
-            # drop_whole_set_mask = torch.rand(1,) < .1
-            # if drop_whole_set_mask:
-            #     input = torch.zeros_like(input)
-
             full_seq.append(input)
         input = torch.stack(full_seq)
+        input = input.view(-1, config.k, input.shape[-1])
+        # rng drop out embeddings
+        drop_mask = torch.rand((input.shape[0], input.shape[1])) < .3
+
+        # TODO we ought to attention mask & pad to largest
+        input[drop_mask] = 0
+        kwargs['scores'][drop_mask] = 0
+
 
         target = tokenizer(target)['image_embeds']
-
-        input = input.view(target.shape[0], -1, target.shape[-1])
         assert len(input.shape) == 3 # [batch, sequence, inner]
     
     with torch.autocast(device_type='cuda', enabled=True, dtype=config.dtype):
@@ -55,7 +53,7 @@ def get_loss(model, input, target, tokenizer, **kwargs):
     # labels = torch.arange(len(target)).to(logits.device)
     # # each group is a positive sample to itself and a negative to all others
     # cls_loss = torch.nn.functional.cross_entropy(logits, labels, reduction='mean')
-    loss =  mse_loss + .1 * cosine_loss
+    loss =  mse_loss + config.cosine_loss_weight * cosine_loss
 
     logging.info(f'MSE: {mse_loss.item()}, Cosine: {cosine_loss.item()}, Weighted Total: {loss.item()}')
     return loss
@@ -72,11 +70,9 @@ class Zoo(torch.nn.Module):
         #     and only training a transformer adapter?
 
     def forward(self, latent, input, **kwargs):
-        # TODO unnecessary intermediates here.
-        # all beloved images
         latent = latent.to('cuda')
         input = input.to('cuda')
-        pred = self.prior(latent, input, scores=kwargs['scores'], target_scores=kwargs['target_scores'], )
+        pred = self.prior(latent, input, scores=kwargs['scores'], target_scores=kwargs.get('target_scores'))
         return pred
     
     @torch.no_grad()
@@ -109,7 +105,11 @@ class Zoo(torch.nn.Module):
         return sum(losses) / len(losses)
     
 def get_model_and_tokenizer(path, device, dtype):
-    prior = PriorTransformer().to(device)
+    if path:
+        prior = PriorTransformer.from_pretrained(path)
+    else:
+        prior = PriorTransformer()
+    prior = prior.to(device)
         
     pipe_prior = KandinskyPriorPipeline.from_pretrained("kandinsky-community/kandinsky-2-2-prior", prior=prior).to(device)
     pipe_prior.image_encoder = pipe_prior.image_encoder.to(device, dtype)
@@ -122,7 +122,8 @@ def get_model_and_tokenizer(path, device, dtype):
 
     return model, model.prior_pipe.image_encoder
 
-def get_optimizer(params, lr):
+def get_optimizer_and_lr_sched(params, lr):
     logging.info(f'Training: {params}')
     optimizer = torch.optim.AdamW(params, lr=lr)
-    return optimizer
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=300)
+    return optimizer, scheduler

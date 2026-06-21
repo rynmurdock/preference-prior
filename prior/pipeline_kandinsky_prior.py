@@ -410,6 +410,7 @@ class KandinskyPriorPipeline(DiffusionPipeline):
         guidance_scale: float = 4.0,
         output_type: Optional[str] = "pt",
         return_dict: bool = True,
+        **kwargs
     ):
         """
         Function invoked when calling the pipeline for generation.
@@ -480,13 +481,22 @@ class KandinskyPriorPipeline(DiffusionPipeline):
             generator=generator,
         )
 
-        scores = torch.full((hidden_states.shape[0], 1+prompt_embeds.shape[1]), 5)
-        # if negative_prompt:
-        # actually can be any scores for the input; target only matters
-        # TODO will accumulate from our scores after awhile anyways
-        scores = torch.full((hidden_states.shape[0], 1+prompt_embeds.shape[1]), 5)
-        neg = torch.full((hidden_states.shape[0], 1+prompt_embeds.shape[1]), 1)
+        if 'scores' not in kwargs.keys():
+            # scores = torch.full((hidden_states.shape[0], 1+prompt_embeds.shape[1]), 5)
+            # if negative_prompt:
+            # actually can be any scores for the input; target only matters
+
+            # TODO will accumulate from our scores after awhile anyways
+            scores = torch.full((hidden_states.shape[0], 1+prompt_embeds.shape[1]), 5)
+        # if we give just scores, target_scores is the first
+        # so we give an embed that's hated by the same input scores as the one loved
+        neg = scores
+        neg[:, :1] = 1
         scores = torch.cat([scores, neg], 0)
+
+        # repeat for negatives
+        hidden_states = hidden_states.repeat(2, 1, 1)
+        prompt_embeds = prompt_embeds.repeat(2, 1, 1)
 
         latents = self.prior(
             hidden_states,
@@ -497,41 +507,14 @@ class KandinskyPriorPipeline(DiffusionPipeline):
 
         image_embeddings = latents
 
-        # if negative prompt has been defined, we retrieve split the image embedding into two
-        if negative_prompt is None:
-            # zero_embeds = self.get_zero_embed(latents.shape[0], device=latents.device)
+        
+        image_embeddings, zero_embeds = image_embeddings.chunk(2)
 
-            # using the same hidden states or different hidden states?
-            
-            hidden_states = torch.randn(
-                (batch_size, prompt_embeds.shape[-1]),
-                device=prompt_embeds.device,
-                dtype=prompt_embeds.dtype,
-                generator=generator,
-            )
-
-            latents = self.prior(
-                hidden_states,
-                proj_embedding=torch.zeros_like(prompt_embeds),
-                attention_mask=text_mask,
-                scores=neg
-            ).predicted_image_embedding
-
-            zero_embeds = latents
-
-            if (
-                hasattr(self, "final_offload_hook")
-                and self.final_offload_hook is not None
-            ):
-                self.final_offload_hook.offload()
-        else:
-            image_embeddings, zero_embeds = image_embeddings.chunk(2)
-
-            if (
-                hasattr(self, "final_offload_hook")
-                and self.final_offload_hook is not None
-            ):
-                self.prior_hook.offload()
+        if (
+            hasattr(self, "final_offload_hook")
+            and self.final_offload_hook is not None
+        ):
+            self.prior_hook.offload()
 
         if output_type not in ["pt", "np"]:
             raise ValueError(

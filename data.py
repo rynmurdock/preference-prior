@@ -92,9 +92,9 @@ def my_collate(batch):
         targets = torch.stack([s['target'] for s in batch])
         samples = torch.stack([s['samples'] for s in batch])
 
-        target_scores = torch.stack([torch.tensor(s['sample_scores']) 
+        target_scores = torch.stack([torch.tensor(s['target_scores']) 
                                                   for s in batch])
-        sample_scores = torch.stack([torch.tensor(s['target_scores']) 
+        sample_scores = torch.stack([torch.tensor(s['sample_scores']) 
                                                   for s in batch])
 
     except Exception as e:
@@ -125,9 +125,7 @@ class ImageFolderSample(torch.utils.data.Dataset):
         with open(data_path) as jsfile:
             self.json_data = json.load(jsfile)
         self.samples = process_json_to_dicts(self.json_data)
-
         self.data_path = os.path.dirname(data_path)
-
 
     def loader(self, img_p):
         im = Image.open(img_p)
@@ -143,6 +141,8 @@ class ImageFolderSample(torch.utils.data.Dataset):
 
             # preferred_inds = [i for i in range(len(sample)) if sample[i][1] > 3]
 
+
+            # TODO pad cases where len(sample) < k / prepackage interactions
             pid_target = random.choice(range(len(sample)))
             pid_cond_subset = random.sample([i for i in 
                                         range(len(sample)) 

@@ -8,7 +8,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
-
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.utils import BaseOutput
 from diffusers.models.attention import BasicTransformerBlock
@@ -27,6 +26,7 @@ class AttnProcessor:
         self,
         attn,
         hidden_states: torch.Tensor,
+        rope_emb: torch.Tensor,
         encoder_hidden_states: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
         temb: torch.Tensor | None = None,
@@ -65,23 +65,13 @@ class AttnProcessor:
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
 
-        query = attn.head_to_batch_dim(query)
-        key = attn.head_to_batch_dim(key)
-        value = attn.head_to_batch_dim(value)
-
-        if 'rope_emb' in kwargs.keys():
-            query = apply_rotary_emb(query, kwargs['rope_emb'])
-            key = apply_rotary_emb(key, kwargs['rope_emb'])
-
-        # attention_probs = attn.get_attention_scores(query, key, attention_mask)
-        # hidden_states = torch.bmm(attention_probs, value)
-        # hidden_states = attn.batch_to_head_dim(hidden_states)
+        query = apply_rotary_emb(query, rope_emb).squeeze()
+        key = apply_rotary_emb(key, rope_emb).squeeze()
+        print(key.shape)
 
         hidden_states = F.scaled_dot_product_attention(
             query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
         )
-        hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, residual.shape[1])
-
 
         # linear proj
         hidden_states = attn.to_out[0](hidden_states)
@@ -103,41 +93,23 @@ class AttnProcessor:
 def apply_rotary_emb(
     x: torch.Tensor,
     freqs_cis: torch.Tensor | tuple[torch.Tensor],
-    sequence_dim: int = 1,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Apply rotary embeddings to input tensors using the given frequency tensor. This function applies rotary embeddings
-    to the given query or key 'x' tensors using the provided frequency tensor 'freqs_cis'. The input tensors are
-    reshaped as complex numbers, and the frequency tensor is reshaped for broadcasting compatibility. The resulting
-    tensors contain rotary embeddings and are returned as real tensors.
-
-    Args:
-        x (`torch.Tensor`):
-            Query or key tensor to apply rotary embeddings. [B, H, S, D] xk (torch.Tensor): Key tensor to apply
-        freqs_cis (`tuple[torch.Tensor]`): Precomputed frequency tensor for complex exponentials. ([S, D], [S, D],)
-
+    Apply rotary embeddings to input tensors using the given frequency tensor.
     Returns:
         tuple[torch.Tensor, torch.Tensor]: tuple of modified query tensor and key tensor with rotary embeddings.
     """
     cos, sin = freqs_cis  # [B, S, D]
-    # modified to add a batch dim
-    if sequence_dim == 2:
-        cos = cos[:, None, None, :, :]
-        sin = sin[:, None, None, :, :]
-    elif sequence_dim == 1:
-        cos = cos[:, None, :, None, :]
-        sin = sin[:, None, :, None, :]
-    else:
-        raise ValueError(f"`sequence_dim={sequence_dim}` but should be 1 or 2.")
+    cos = cos[:, :, :]
+    sin = sin[:, :, :]
 
     cos, sin = cos.to(x.device), sin.to(x.device)
 
     # Used for flux, cogvideox, hunyuan-dit
     x_real, x_imag = x.reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, H, S, D//2]
-    x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(3)
+    x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(2)
 
     out = (x.float() * cos + x_rotated.float() * sin).to(x.dtype)
-
     return out
 
 
@@ -264,7 +236,7 @@ class PriorTransformer(ModelMixin, ConfigMixin):
         self,
         num_attention_heads: int = 20,
         attention_head_dim: int = 64,
-        num_layers: int = 32,
+        num_layers: int = 36,
         embedding_dim: int = 1280,
         num_embeddings=77,
         additional_embeddings=3, # as we have removed the time embedding
@@ -357,6 +329,8 @@ class PriorTransformer(ModelMixin, ConfigMixin):
 
         self.clip_mean = nn.Parameter(torch.zeros(1, clip_embed_dim))
         self.clip_std = nn.Parameter(torch.zeros(1, clip_embed_dim))
+
+        self.set_default_attn_processor()
 
     @property
     # Copied from diffusers.models.unet_2d_condition.UNet2DConditionModel.attn_processors
@@ -506,9 +480,9 @@ class PriorTransformer(ModelMixin, ConfigMixin):
             hidden_states = hidden_states[:, None, :]
 
         additional_embeds = additional_embeds + [
+            hidden_states,
             proj_embeddings,
             # time_embeddings[:, None, :],
-            hidden_states,
         ]
 
         if self.prd_embedding is not None:
@@ -537,7 +511,7 @@ class PriorTransformer(ModelMixin, ConfigMixin):
         hidden_states = hidden_states + positional_embeddings[:, :hidden_states.shape[1]]
 
         if target_scores is not None:
-            scores = torch.cat([target_scores, scores], dim=-1)
+            scores = torch.cat([target_scores, scores], dim=1)
         
         # append for additional states
         prd_ids = scores.new_zeros((scores.shape[0], 1))
@@ -546,7 +520,6 @@ class PriorTransformer(ModelMixin, ConfigMixin):
         # same range as timesteps; better bet of similar functioning 
         #   than changing theta
         pref_ids = scores.unsqueeze(-1) * 200
-        assert pref_ids.shape[1] == hidden_states.shape[1], f'{hidden_states.shape=} should == {pref_ids.shape=}'
         rope_emb = self.rope_embed_layer(pref_ids)
 
         if attention_mask is not None:
@@ -558,9 +531,10 @@ class PriorTransformer(ModelMixin, ConfigMixin):
         if self.norm_in is not None:
             hidden_states = self.norm_in(hidden_states)
 
+        assert pref_ids.shape[1] == hidden_states.shape[1], f'{hidden_states.shape=} should == {pref_ids.shape=}'
         for block in self.transformer_blocks:
             hidden_states = block(hidden_states, attention_mask=attention_mask,
-                                  added_cond_kwargs={'rope_emb':rope_emb})
+                                  cross_attention_kwargs={'rope_emb':rope_emb})
 
         hidden_states = self.norm_out(hidden_states)
 

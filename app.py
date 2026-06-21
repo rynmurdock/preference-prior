@@ -1,4 +1,8 @@
 
+'''
+python app.py
+'''
+
 import gradio as gr
 import random
 import time
@@ -18,7 +22,6 @@ k = model.k
 device = "cuda"
 
 
-import spaces
 import matplotlib.pyplot as plt
 
 import os
@@ -38,16 +41,13 @@ torch.backends.cudnn.allow_tf32 = True
 
 prevs_df = pd.DataFrame(columns=['paths', 'embeddings', 'ips', 'user:rating', 'latest_user_to_rate', 'from_user_id', 'text', 'gemb'])
 
-import spaces
 start_time = time.time()
 
 ####################### Setup Model
-from diffusers import EulerDiscreteScheduler
 from PIL import Image
 import uuid
 
 
-@spaces.GPU()
 def generate_gpu(in_im_embs, prompt='the scene'):
     with torch.no_grad():
         in_im_embs = in_im_embs.to('cuda')
@@ -59,7 +59,7 @@ def generate_gpu(in_im_embs, prompt='the scene'):
             num_inference_steps=50,
             image_embeds=positive_image_embeds,
             negative_image_embeds=negative_image_embeds,
-            guidance_scale=18,
+            guidance_scale=8,
         ).images[0]
         cond = (
                     model.prior_pipe.image_processor(images, return_tensors="pt")
@@ -90,28 +90,42 @@ def generate(in_im_embs, ):
 #######################
 
 
-@spaces.GPU()
-def sample_embs(prompt_embeds):
+def sample_embs(prompt_embeds, scores, negative=False):
+    # we would like a good image
+    target_score = scores.new_ones((scores.shape[0], 1)) * 5
+    scores = torch.cat([target_score, scores], 1)
+    if negative:
+        # we'd like a bad image.
+        scores[:, :1] = 1
+
+    if isinstance(prompt_embeds, list):
+        prompt_embeds = torch.cat(prompt_embeds, 0)[None]
+    
     latent = torch.randn(prompt_embeds.shape[0], 1, prompt_embeds.shape[-1])
+
+    print(f'{scores=}')
+
     if prompt_embeds.shape[1] < config.k:
-            prompt_embeds = torch.nn.functional.pad(prompt_embeds, [0, 0, 0, config.k-prompt_embeds.shape[1]])
+        prompt_embeds = torch.nn.functional.pad(prompt_embeds, [0, 0, 0, config.k-prompt_embeds.shape[1]])
+        print(f'{scores.shape=}')
+        # pad scorers to k embeddings plus target
+        scores = torch.nn.functional.pad(scores, [0, 1+config.k-scores.shape[1]])
+
     assert prompt_embeds.shape[1] == config.k, f"The model is set to take `k`` cond image embeds but is shape {prompt_embeds.shape}"
-    image_embeds = model(latent.to('cuda'), prompt_embeds.to('cuda')).predicted_image_embedding
+
+    image_embeds = model(latent.to('cuda'), prompt_embeds.to('cuda'), scores=scores).predicted_image_embedding
 
     return image_embeds
 
-@spaces.GPU()
 def get_user_emb(embs, ys):
-    positives = [e for e, ys in zip(embs, ys) if ys == 1]
-    embs = random.sample(positives, min(config.k, len(positives)))
-    positives = torch.stack(embs, 1)
+    if len(ys) > k:
+        inds = random.sample(range(len(ys)), config.k)
+    else:
+        inds = range(len(ys))
+    picked_embeddings = [embs[i] for i in inds]
+    scores = torch.tensor([ys[i] for i in inds])[None]
 
-    negs = [e for e, ys in zip(embs, ys) if ys == 0]
-    negative_embs = random.sample(negs, min(config.k, len(negs)))
-    negatives = torch.stack(negative_embs, 1)
-
-    image_embeds = torch.stack([sample_embs(negatives), sample_embs(positives)])
-
+    image_embeds = torch.stack([sample_embs(picked_embeddings, scores, negative=True), sample_embs(picked_embeddings, scores)])
     return image_embeds
 
 
@@ -205,11 +219,6 @@ def next_image(calibrate_prompts, user_id):
 
 
 
-
-
-
-
-
 def start(_, calibrate_prompts, user_id, request: gr.Request):
     user_id = int(str(time.time())[-7:].replace('.', ''))
     image, calibrate_prompts = next_image(calibrate_prompts, user_id)
@@ -232,16 +241,16 @@ def choose(img, choice, calibrate_prompts, user_id, request: gr.Request):
     
     
     if choice == '👍':
-        choice = [1, 1]
+        choice = [5, 5]
     elif choice == 'Neither (Space)':
         img, calibrate_prompts,  = next_image(calibrate_prompts, user_id)
         return img, calibrate_prompts, 
     elif choice == '👎':
-        choice = [0, 0]
+        choice = [1, 1]
     elif choice == '👍 Style':
-        choice = [0, 1]
+        choice = [1, 5]
     elif choice == '👍 Content':
-        choice = [1, 0]
+        choice = [5, 1]
     else:
         assert False, f'choice is {choice}'
     
@@ -402,7 +411,6 @@ scheduler.add_job(func=background_next_image, trigger="interval", seconds=.2)
 scheduler.start()
 
 # TODO shouldn't call this before gradio launch, yeah?
-@spaces.GPU()
 def encode_space(x):
     im = (
             model.prior_pipe.image_processor(x, return_tensors="pt")
@@ -415,10 +423,10 @@ def encode_space(x):
 
 # prep our calibration videos
 m_calibrate = [ # DO NOT NAME THESE PNGs JUST NUMBERS! apparently we assign images by number
-    ('./1o.png', 'describe the scene: omens in the suburbs'),
-    ('./2o.png', 'describe the scene: geometric abstract art of a windmill'),
-    ('./3o.png', 'describe the scene: memento mori'),
-    ('./4o.png', 'describe the scene: a green plate with anespresso'),
+    ('./1o.png', '1'),
+    ('./2o.png', '2'),
+    ('./3o.png', '3'),
+    ('./4o.png', '4'),
     ('./5o.png', '5 '),
     ('./6o.png', '6 '),
     ('./7o.png', '7 '),
