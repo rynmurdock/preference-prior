@@ -67,7 +67,6 @@ class AttnProcessor:
 
         query = apply_rotary_emb(query, rope_emb).squeeze()
         key = apply_rotary_emb(key, rope_emb).squeeze()
-        print(key.shape)
 
         hidden_states = F.scaled_dot_product_attention(
             query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False

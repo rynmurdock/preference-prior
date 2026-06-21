@@ -65,6 +65,7 @@ def main():
                     assert all([os.path.exists(a) for a in examples]), f'{all([os.path.exists(a) for a in examples])=}'
                     model.do_qual_val([[Image.open(j) for j in examples]], k=config.k)
                     val_loss = model.do_quant_val(val_dataloader)
+                    logging.info(f'{val_loss=:.4f}')
                     validation_losses.append(val_loss)
                     if len(inner_train_losses) > 0:
                         train_losses.append(sum(inner_train_losses)/len(inner_train_losses))
@@ -77,7 +78,17 @@ def main():
                     plt.clf()
 
             optimizer.zero_grad()
-            loss = get_loss(model, input, target, tokenizer, scores=input_scores, target_scores=target_scores)
+            loss, loss_logging_dict = get_loss(model, input, target, 
+                                                   tokenizer, 
+                                                   scores=input_scores, 
+                                                   target_scores=target_scores)
+            if ind % 20 == 0:
+                mse_loss, cosine_loss = loss_logging_dict.get('mse_loss'), loss_logging_dict.get('cosine_loss')
+                logging.info(
+                    f'Train MSE: {mse_loss}, '
+                    f'Cosine: {cosine_loss},' 
+                    f'Weighted Total: {loss.item()}'
+                )
             inner_train_losses.append(loss.item())
             loss.backward()
             optimizer.step()

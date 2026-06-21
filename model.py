@@ -54,9 +54,9 @@ def get_loss(model, input, target, tokenizer, **kwargs):
     # # each group is a positive sample to itself and a negative to all others
     # cls_loss = torch.nn.functional.cross_entropy(logits, labels, reduction='mean')
     loss =  mse_loss + config.cosine_loss_weight * cosine_loss
-
-    logging.info(f'MSE: {mse_loss.item()}, Cosine: {cosine_loss.item()}, Weighted Total: {loss.item()}')
-    return loss
+    logging_dict = {'mse_loss': mse_loss.item(), 
+                    'cosine_loss': cosine_loss.item()}
+    return loss, logging_dict
 
 
 class Zoo(torch.nn.Module):
@@ -100,7 +100,9 @@ class Zoo(torch.nn.Module):
             input, input_scores, target, target_scores = batch
             input = input.to(config.device)
             target = target.to(config.device)
-            loss = get_loss(self, input, target, self.prior_pipe.image_encoder, scores=input_scores, target_scores=target_scores)
+            loss, loss_logging_dict = get_loss(self, 
+                                               input, target, self.prior_pipe.image_encoder, 
+                                               scores=input_scores, target_scores=target_scores)
             losses.append(loss.item())
         return sum(losses) / len(losses)
     
