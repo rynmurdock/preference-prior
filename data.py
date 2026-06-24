@@ -143,10 +143,13 @@ class ImageFolderSample(torch.utils.data.Dataset):
 
 
             # TODO pad cases where len(sample) < k / prepackage interactions
+            # would want to do it at point of embeddings
+            # so would need to return list of tensors/similar, not single tensor
+
             pid_target = random.choice(range(len(sample)))
             pid_cond_subset = random.sample([i for i in 
-                                        range(len(sample)) 
-                                        if i != pid_target], self.k)
+                                    range(len(sample)) 
+                                    if i != pid_target], self.k)
 
             target_path = sample[pid_target][0]
             target_score = int(sample[pid_target][1])
@@ -158,7 +161,7 @@ class ImageFolderSample(torch.utils.data.Dataset):
             if not isinstance(target, torch.Tensor):
                 target = target[0]
 
-            assert len(pid_cond_subset) == self.k
+            assert len(pid_cond_subset) == self.k, f'{len(pid_cond_subset)=} != {self.k=}'
             input_paths = [sample[i][0] for i in pid_cond_subset]
             input_scores = [int(sample[i][1]) for i in pid_cond_subset]
             samples = torch.stack([self.processor(self.loader(f'{self.data_path}/../'+i)).data['pixel_values'][0] for i in input_paths])

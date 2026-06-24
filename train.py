@@ -1,16 +1,20 @@
 
 
-########################################
-# python -m train
+###########################################
+'''
+python -m train
+'''
 ###########################################
 
 
+import os
+import sys
 import torch
+torch.set_float32_matmul_precision('high')
 import logging
 import numpy as np
 from tqdm import tqdm
 from PIL import Image
-import os
 
 import matplotlib
 matplotlib.use('Agg')
@@ -19,7 +23,6 @@ import matplotlib.pyplot as plt
 from data import get_dataloader
 from model import get_model_and_tokenizer, get_optimizer_and_lr_sched, get_loss
 import config
-
 
 
 logging.basicConfig(level=logging.INFO)
@@ -38,9 +41,13 @@ def main():
     train_losses = []
     inner_train_losses = []
     validation_losses = []
+    total_inds = 0
 
     for epoch in range(config.epochs):
         for ind, batch in tqdm(enumerate(iter(dataloader))):
+            if total_inds > config.max_steps:
+                model.prior.save_pretrained(f'{config.save_path}/last_epoch_ckpt', from_pt=True)
+                sys.exit()
             if batch is None:
                 continue
 
@@ -48,7 +55,7 @@ def main():
             input = input.to(config.device)
             target = target.to(config.device)
 
-            if ind % 50 == 0:
+            if total_inds % 1000 == 0:
                 # NOTE autocasting because our fp32 training model is also our val model; only want calculations in half.
                 with torch.autocast(enabled=True, device_type='cuda', dtype=config.dtype): 
                     # TODO make this not brittle
@@ -82,7 +89,7 @@ def main():
                                                    tokenizer, 
                                                    scores=input_scores, 
                                                    target_scores=target_scores)
-            if ind % 20 == 0:
+            if total_inds % 1000 == 0:
                 mse_loss, cosine_loss = loss_logging_dict.get('mse_loss'), loss_logging_dict.get('cosine_loss')
                 logging.info(
                     f'Train MSE: {mse_loss}, '
@@ -94,9 +101,10 @@ def main():
             optimizer.step()
             lr_sched.step()
 
-            if ind % 100 == 0:
+            total_inds += 1
+            if total_inds % 1000 == 0:
                 # TODO add loading from path
-                model.prior.save_pretrained(f'{config.save_path}/last_epoch_ckpt', from_pt=True) 
+                model.prior.save_pretrained(f'{config.save_path}/last_epoch_ckpt', from_pt=True)
 
 if __name__ == '__main__':
     main()

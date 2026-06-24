@@ -13,10 +13,10 @@ import config
 from model import get_model_and_tokenizer
 
 model, model.prior_pipe.image_encoder = get_model_and_tokenizer(config.model_path, 
-                                                                'cuda', torch.bfloat16)
+                                                                'cuda', torch.bfloat16,
+                                                                compile=False,)
 k = model.k
 
-# TODO unify/merge origin and this
 # TODO save & restart from (if it exists) dataframe parquet
 
 device = "cuda"
@@ -89,6 +89,20 @@ def generate(in_im_embs, ):
 
 #######################
 
+def get_negative_scores(scores, negative_by_options=False):
+    # negative where:
+    #   person with opposite taste on options to our person would love it
+    if negative_by_options:
+        neg = scores
+        neg[:, 1:] = (5 - scores[:, 1:]) + 1
+        neg[:, :1] = 5
+    #   our person would hate it
+    else:
+        # so we give an embed that's hated by the same input scores as the one loved
+        neg = scores
+        neg[:, :1] = 1
+    return neg
+
 
 def sample_embs(prompt_embeds, scores, negative=False):
     # we would like a good image
@@ -96,7 +110,7 @@ def sample_embs(prompt_embeds, scores, negative=False):
     scores = torch.cat([target_score, scores], 1)
     if negative:
         # we'd like a bad image.
-        scores[:, :1] = 1
+        scores = get_negative_scores(scores)
 
     if isinstance(prompt_embeds, list):
         prompt_embeds = torch.cat(prompt_embeds, 0)[None]
@@ -119,7 +133,16 @@ def sample_embs(prompt_embeds, scores, negative=False):
 
 def get_user_emb(embs, ys):
     if len(ys) > k:
-        inds = random.sample(range(len(ys)), config.k)
+        inds = range(len(ys))
+        negs_inds = [ind for ind in inds if ys[ind] < 3]
+        pos_inds = [ind for ind in inds if ys[ind] >= 3]
+        if len(pos_inds) < k:
+            inds = pos_inds + random.sample(inds, k-len(pos_inds))
+        else:
+            assert k > 4, f'{k=} must be greater than 4.'
+            min_pos = min(len(pos_inds), 4)
+            pos_split = random.randint(min_pos, k-min_pos)
+            inds = random.sample(pos_inds, pos_split) + random.sample(negs_inds, k-pos_split)
     else:
         inds = range(len(ys))
     picked_embeddings = [embs[i] for i in inds]

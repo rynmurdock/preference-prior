@@ -410,6 +410,7 @@ class KandinskyPriorPipeline(DiffusionPipeline):
         guidance_scale: float = 4.0,
         output_type: Optional[str] = "pt",
         return_dict: bool = True,
+        negative_by_options=True,
         **kwargs
     ):
         """
@@ -488,10 +489,22 @@ class KandinskyPriorPipeline(DiffusionPipeline):
 
             # TODO will accumulate from our scores after awhile anyways
             scores = torch.full((hidden_states.shape[0], 1+prompt_embeds.shape[1]), 5)
+
+
         # if we give just scores, target_scores is the first
-        # so we give an embed that's hated by the same input scores as the one loved
-        neg = scores
-        neg[:, :1] = 1
+
+        # negative where:
+        #   person with opposite taste on options to our person would love it
+        if negative_by_options:
+            neg = scores
+            neg[:, 1:] = (5 - scores[:, 1:]) + 1
+            neg[:, :1] = 5
+        #   our person would hate it
+        else:
+            # so we give an embed that's hated by the same input scores as the one loved
+            neg = scores
+            neg[:, :1] = 1
+
         scores = torch.cat([scores, neg], 0)
 
         # repeat for negatives

@@ -85,6 +85,7 @@ class Zoo(torch.nn.Module):
             num_inference_steps=50,
             image_embeds=image_embeds,
             negative_image_embeds=negative_image_embeds,
+            guidance_scale=8,
             generator=generator
         ).images
         images[0].save('latest_val.png')
@@ -106,13 +107,18 @@ class Zoo(torch.nn.Module):
             losses.append(loss.item())
         return sum(losses) / len(losses)
     
-def get_model_and_tokenizer(path, device, dtype):
+def get_model_and_tokenizer(path, device, dtype, compile=None):
     if path:
         prior = PriorTransformer.from_pretrained(path)
     else:
         prior = PriorTransformer()
     prior = prior.to(device)
-        
+
+    if compile is not None:
+        config.do_compile = compile
+    if config.do_compile:
+        prior = torch.compile(prior)
+    
     pipe_prior = KandinskyPriorPipeline.from_pretrained("kandinsky-community/kandinsky-2-2-prior", prior=prior).to(device)
     pipe_prior.image_encoder = pipe_prior.image_encoder.to(device, dtype)
     # Note: don't set the prior to `dtype`` as it may be half precision, 

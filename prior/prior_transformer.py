@@ -115,7 +115,7 @@ def apply_rotary_emb(
 def get_1d_rotary_pos_embed(
     dim: int,
     pos: np.ndarray | int,
-    theta: float = 10000.0,
+    theta: float = 1000.0,
     linear_factor=1.0,
     ntk_factor=1.0,
     freqs_dtype=torch.float32,  #  torch.float32, torch.float64 (flux)
