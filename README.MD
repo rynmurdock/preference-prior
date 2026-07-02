@@ -13,3 +13,11 @@ Wang et al. models preference using a generator conditioned on averaged CLIP emb
 
 My previous work based on Collaborative Filtering with CLIP embeddings: https://github.com/rynmurdock/generative_recommender
 
+## Setup
+
+```
+uv venv
+uv pip install -r requirements.txt
+source ./.venv/bin/activate
+```
+
