@@ -17,7 +17,7 @@ My previous work based on Collaborative Filtering with CLIP embeddings: https://
 
 ```
 uv venv
-uv pip install -r requirements.txt
 source ./.venv/bin/activate
+uv pip install -r requirements.txt
 ```
 
