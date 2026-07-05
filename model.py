@@ -28,20 +28,30 @@ def get_loss(model, input, target, tokenizer, **kwargs):
         input[drop_mask] = 0
         kwargs['scores'][drop_mask] = 0
 
-
         target = tokenizer(target)['image_embeds']
         assert len(input.shape) == 3 # [batch, sequence, inner]
     
     with torch.autocast(device_type='cuda', enabled=True, dtype=config.dtype):
         latent = torch.randn(input.shape[0], input.shape[-1], device=input.device)
-        output = model(latent, input, scores=kwargs['scores'], target_scores=kwargs['target_scores']).predicted_image_embedding
+        if config.do_diffusion:
+            ts = torch.randint(0, 1000, (latent.shape[0]))
+            model.prior_pipe.scheduler.add_noise(target, noise=latent, timesteps=ts)
+
+        output = model(latent, input, 
+                       scores=kwargs['scores'], 
+                       target_scores=kwargs['target_scores'],
+                       timesteps=ts if config.do_diffusion else None,
+                       ).predicted_image_embedding
 
     output = output.to(torch.float32)
     target = target.to(torch.float32)
     mse_loss = torch.nn.functional.mse_loss(target, output).mean()
     
     assert len(target.shape) == 2 and len(output.shape) == 2
-    cosine_loss = 1 - torch.nn.functional.cosine_similarity(output, target).mean()
+    if config.do_diffusion:
+        cosine_loss = torch.zeros_like(mse_loss)        
+    else:
+        cosine_loss = 1 - torch.nn.functional.cosine_similarity(output, target).mean()
     
     # # # take advantage of negatives but deal with cases where plausibly they aren't negatives
     # output = torch.nn.functional.normalize(output.view(-1, output.shape[-1]))
@@ -50,7 +60,9 @@ def get_loss(model, input, target, tokenizer, **kwargs):
     # labels = torch.arange(len(target)).to(logits.device)
     # # each group is a positive sample to itself and a negative to all others
     # cls_loss = torch.nn.functional.cross_entropy(logits, labels, reduction='mean')
+
     loss =  mse_loss + config.cosine_loss_weight * cosine_loss
+
     logging_dict = {'mse_loss': mse_loss.item(), 
                     'cosine_loss': cosine_loss.item()}
     return loss, logging_dict
@@ -69,7 +81,11 @@ class Zoo(torch.nn.Module):
     def forward(self, latent, input, **kwargs):
         latent = latent.to('cuda')
         input = input.to('cuda')
-        pred = self.prior(latent, input, scores=kwargs['scores'], target_scores=kwargs.get('target_scores'))
+        pred = self.prior(latent, input, 
+                          scores=kwargs['scores'], 
+                          target_scores=kwargs.get('target_scores'),
+                          timesteps=kwargs.get('timesteps'),
+                          )
         return pred
     
     @torch.no_grad()
@@ -106,9 +122,9 @@ class Zoo(torch.nn.Module):
     
 def get_model_and_tokenizer(path, device, dtype, compile=None):
     if path:
-        prior = PriorTransformer.from_pretrained(path)
+        prior = PriorTransformer.from_pretrained(path, do_diffusion=config.do_diffusion)
     else:
-        prior = PriorTransformer()
+        prior = PriorTransformer(do_diffusion=config.do_diffusion)
     prior = prior.to(device)
 
     if compile is not None:
@@ -116,7 +132,8 @@ def get_model_and_tokenizer(path, device, dtype, compile=None):
     if config.do_compile:
         prior = torch.compile(prior)
     
-    pipe_prior = KandinskyPriorPipeline.from_pretrained("kandinsky-community/kandinsky-2-2-prior", prior=prior).to(device)
+    pipe_prior = KandinskyPriorPipeline.from_pretrained("kandinsky-community/kandinsky-2-2-prior", 
+                                                        prior=prior, do_diffusion=config.do_diffusion).to(device)
     pipe_prior.image_encoder = pipe_prior.image_encoder.to(device, dtype)
     # Note: don't set the prior to `dtype`` as it may be half precision, 
     #     and we're training with mixed precision

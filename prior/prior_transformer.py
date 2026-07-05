@@ -240,7 +240,7 @@ class PriorTransformer(ModelMixin, ConfigMixin):
         num_embeddings=77,
         additional_embeddings=3, # as we have removed the time embedding
         dropout: float = 0.0,
-        # time_embed_act_fn: str = "silu",
+        time_embed_act_fn: str = "silu",
         norm_in_type: Optional[str] = None,  # layer
         embedding_proj_norm_type: Optional[str] = None,  # layer
         encoder_hid_proj_type: Optional[str] = "linear",  # linear
@@ -248,6 +248,7 @@ class PriorTransformer(ModelMixin, ConfigMixin):
         # time_embed_dim: Optional[int] = None,
         embedding_proj_dim: Optional[int] = None,
         clip_embed_dim: Optional[int] = None,
+        do_diffusion: bool = False,
     ):
         super().__init__()
         self.num_attention_heads = num_attention_heads
@@ -255,12 +256,14 @@ class PriorTransformer(ModelMixin, ConfigMixin):
         inner_dim = num_attention_heads * attention_head_dim
         self.additional_embeddings = additional_embeddings
 
-        # time_embed_dim = time_embed_dim or inner_dim
+        time_embed_dim = time_embed_dim or inner_dim
         embedding_proj_dim = embedding_proj_dim or embedding_dim
         clip_embed_dim = clip_embed_dim or embedding_dim
 
-        # self.time_proj = Timesteps(inner_dim, True, 0)
-        # self.time_embedding = TimestepEmbedding(inner_dim, time_embed_dim, out_dim=inner_dim, act_fn=time_embed_act_fn)
+        self.do_diffusion = do_diffusion
+        if do_diffusion:
+            self.time_proj = Timesteps(inner_dim, True, 0)
+            self.time_embedding = TimestepEmbedding(inner_dim, time_embed_dim, out_dim=inner_dim, act_fn=time_embed_act_fn)
 
         self.proj_in = nn.Linear(embedding_dim, inner_dim)
 
@@ -401,8 +404,8 @@ class PriorTransformer(ModelMixin, ConfigMixin):
     def forward(
         self,
         hidden_states,
-        # timestep: Union[torch.Tensor, float, int],
         proj_embedding: torch.FloatTensor,
+        timesteps: Union[torch.Tensor, float, int] = None,
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
         attention_mask: Optional[torch.BoolTensor] = None,
         return_dict: bool = True,
@@ -435,21 +438,19 @@ class PriorTransformer(ModelMixin, ConfigMixin):
         batch_size = hidden_states.shape[0]
         assert encoder_hidden_states == None, 'not using this'
 
-        # timesteps = timestep
-        # if not torch.is_tensor(timesteps):
-        #     timesteps = torch.tensor([timesteps], dtype=torch.long, device=hidden_states.device)
-        # elif torch.is_tensor(timesteps) and len(timesteps.shape) == 0:
-        #     timesteps = timesteps[None].to(hidden_states.device)
+        if self.do_diffusion:
+            if not torch.is_tensor(timesteps):
+                timesteps = torch.tensor([timesteps], dtype=torch.long, device=hidden_states.device)
+            elif torch.is_tensor(timesteps) and len(timesteps.shape) == 0:
+                timesteps = timesteps[None].to(hidden_states.device)
 
-        # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
-        # timesteps = timesteps * torch.ones(batch_size, dtype=timesteps.dtype, device=timesteps.device)
-
-        # timesteps_projected = self.time_proj(timesteps)
-
-        # timesteps does not contain any weights and will always return f32 tensors
-        # but time_embedding might be fp16, so we need to cast here.
-        # timesteps_projected = timesteps_projected.to(dtype=self.dtype)
-        # time_embeddings = self.time_embedding(timesteps_projected)
+            # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
+            timesteps = timesteps * torch.ones(batch_size, dtype=timesteps.dtype, device=timesteps.device)
+            timesteps_projected = self.time_proj(timesteps)
+            # timesteps does not contain any weights and will always return f32 tensors
+            # but time_embedding might be fp16, so we need to cast here.
+            timesteps_projected = timesteps_projected.to(dtype=self.dtype)
+            time_embeddings = self.time_embedding(timesteps_projected)
 
         if self.embedding_proj_norm is not None:
             proj_embedding = self.embedding_proj_norm(proj_embedding)
@@ -477,6 +478,11 @@ class PriorTransformer(ModelMixin, ConfigMixin):
 
         if len(hidden_states.shape) == 2:
             hidden_states = hidden_states[:, None, :]
+        
+        # NOTE we add instead of concatenating; could ablate
+        if len(time_embeddings.shape) == 2:
+            time_embeddings = time_embeddings[:, None, :]
+        hidden_states = hidden_states + time_embeddings
 
         additional_embeds = additional_embeds + [
             hidden_states,

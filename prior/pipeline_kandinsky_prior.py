@@ -148,6 +148,7 @@ class KandinskyPriorPipeline(DiffusionPipeline):
         tokenizer: CLIPTokenizer,
         scheduler: UnCLIPScheduler,
         image_processor: CLIPImageProcessor,
+        do_diffusion: bool = False,
     ):
         super().__init__()
 
@@ -159,6 +160,8 @@ class KandinskyPriorPipeline(DiffusionPipeline):
             image_encoder=image_encoder,
             image_processor=image_processor,
         )
+
+        self.do_diffusion = do_diffusion
 
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_INTERPOLATE_DOC_STRING)
@@ -172,7 +175,7 @@ class KandinskyPriorPipeline(DiffusionPipeline):
         latents: Optional[torch.FloatTensor] = None,
         negative_prior_prompt: Optional[str] = None,
         negative_prompt: str = "",
-        guidance_scale: float = 4.0,
+        guidance_scale: float = 5,
         device=None,
     ):
         """
@@ -521,12 +524,44 @@ class KandinskyPriorPipeline(DiffusionPipeline):
         hidden_states = hidden_states.repeat(2, 1, 1)
         prompt_embeds = prompt_embeds.repeat(2, 1, 1)
 
-        latents = self.prior(
-            hidden_states,
-            proj_embedding=prompt_embeds,
-            attention_mask=text_mask,
-            scores=scores
-        ).predicted_image_embedding
+        if not self.do_diffusion:
+            latents = self.prior(
+                hidden_states,
+                proj_embedding=prompt_embeds,
+                attention_mask=text_mask,
+                scores=scores
+            ).predicted_image_embedding
+        else:
+            self.scheduler.set_timesteps(num_inference_steps, device=device)
+            timesteps = self.scheduler.timesteps
+            for i, t in enumerate(timesteps):
+                # expand the latents if we are doing classifier free guidance
+                latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
+
+                predicted_image_embedding = self.prior(
+                    latent_model_input,
+                    proj_embedding=prompt_embeds,
+                    attention_mask=text_mask,
+                    scores=scores
+                ).predicted_image_embedding
+
+                predicted_image_embedding_uncond, predicted_image_embedding_text = predicted_image_embedding.chunk(2)
+                predicted_image_embedding = predicted_image_embedding_uncond + guidance_scale * (
+                    predicted_image_embedding_text - predicted_image_embedding_uncond
+                )
+
+                if i + 1 == timesteps.shape[0]:
+                    prev_timestep = None
+                else:
+                    prev_timestep = timesteps[i + 1]
+
+                latents = self.scheduler.step(
+                    predicted_image_embedding,
+                    timestep=t,
+                    sample=latents,
+                    generator=generator,
+                    prev_timestep=prev_timestep,
+                ).prev_sample
 
         image_embeddings = latents
 
