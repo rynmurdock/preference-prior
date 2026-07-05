@@ -22,8 +22,7 @@ import matplotlib.pyplot as plt
 
 from data import get_dataloader
 from model import get_model_and_tokenizer, get_optimizer_and_lr_sched, get_loss
-import config
-
+from config import config
 
 logging.basicConfig(level=logging.INFO)
 
@@ -55,7 +54,7 @@ def main():
             input = input.to(config.device)
             target = target.to(config.device)
 
-            if total_inds % 1000 == 0:
+            if total_inds % config.freq == 0:
                 # NOTE autocasting because our fp32 training model is also our val model; only want calculations in half.
                 with torch.autocast(enabled=True, device_type='cuda', dtype=config.dtype): 
                     # TODO make this not brittle
@@ -73,9 +72,11 @@ def main():
                     model.do_qual_val([[Image.open(j) for j in examples]], k=config.k)
                     val_loss = model.do_quant_val(val_dataloader)
                     logging.info(f'{val_loss=:.4f}')
-                    validation_losses.append(val_loss)
+                    if total_inds // config.freq != 0:
+                        validation_losses.append(val_loss)
                     if len(inner_train_losses) > 0:
-                        train_losses.append(sum(inner_train_losses)/len(inner_train_losses))
+                        if total_inds // config.freq != 0:
+                            train_losses.append(sum(inner_train_losses)/len(inner_train_losses))
                         inner_train_losses = []
 
                     train_losses = train_losses
@@ -89,7 +90,7 @@ def main():
                                                    tokenizer, 
                                                    scores=input_scores, 
                                                    target_scores=target_scores)
-            if total_inds % 1000 == 0:
+            if total_inds % config.freq == 0:
                 mse_loss, cosine_loss = loss_logging_dict.get('mse_loss'), loss_logging_dict.get('cosine_loss')
                 logging.info(
                     f'Train MSE: {mse_loss}, '
@@ -102,7 +103,7 @@ def main():
             lr_sched.step()
 
             total_inds += 1
-            if total_inds % 1000 == 0:
+            if total_inds % config.freq == 0:
                 # TODO add loading from path
                 model.prior.save_pretrained(f'{config.save_path}/last_epoch_ckpt', from_pt=True)
 

@@ -400,8 +400,8 @@ class KandinskyPriorPipeline(DiffusionPipeline):
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
-        prompt: Union[str, List[str]],
-        k,
+        k, # TODO should be set by transformer model
+        prompt=None,
         negative_prompt: Optional[Union[str, List[str]]] = None,
         num_images_per_prompt: int = 1,
         num_inference_steps: int = 25,
@@ -411,6 +411,9 @@ class KandinskyPriorPipeline(DiffusionPipeline):
         output_type: Optional[str] = "pt",
         return_dict: bool = True,
         negative_by_options=True,
+        prompt_embeds=None,
+        negative_scores=None,
+        scores=None,
         **kwargs
     ):
         """
@@ -455,23 +458,29 @@ class KandinskyPriorPipeline(DiffusionPipeline):
 
         device = self._execution_device
 
-        batch_size = len(prompt)
-        batch_size = batch_size * num_images_per_prompt
+        assert prompt is not None or prompt_embeds is not None
 
-        full_prompt = []
-        for b in prompt: # TODO of course vectorize this lol
-            full_seq = []
-            for p in b:
-                prompt_embeds, text_mask = self._encode_prompt(
-                    p, device, num_images_per_prompt, False, negative_prompt
-                )
-                full_seq.append(prompt_embeds)
-                prompt_embeds = torch.cat(full_seq, 0)
-            full_prompt.append(prompt_embeds)
-        prompt_embeds = torch.stack(full_prompt)
+        text_mask = None
+        if prompt_embeds is None:
+            full_prompt = []
+            for b in prompt: # TODO of course vectorize this lol
+                full_seq = []
+                for p in b:
+                    prompt_embeds, text_mask = self._encode_prompt(
+                        p, device, num_images_per_prompt, False, negative_prompt
+                    )
+                    full_seq.append(prompt_embeds)
+                    prompt_embeds = torch.cat(full_seq, 0)
+                full_prompt.append(prompt_embeds)
+            prompt_embeds = torch.stack(full_prompt)
+
         if prompt_embeds.shape[1] < k:
             prompt_embeds = torch.nn.functional.pad(prompt_embeds, [0, 0, 0, k-prompt_embeds.shape[1]])
         assert prompt_embeds.shape[1] == k, f"The model is set to take `k`` cond image embeds but is shape {prompt_embeds.shape}"
+
+        batch_size = len(prompt_embeds)
+        batch_size = batch_size * num_images_per_prompt
+
 
         prompt_embeds = prompt_embeds.to('cuda')
 
@@ -482,7 +491,7 @@ class KandinskyPriorPipeline(DiffusionPipeline):
             generator=generator,
         )
 
-        if 'scores' not in kwargs.keys():
+        if scores is None:
             # scores = torch.full((hidden_states.shape[0], 1+prompt_embeds.shape[1]), 5)
             # if negative_prompt:
             # actually can be any scores for the input; target only matters
@@ -493,19 +502,20 @@ class KandinskyPriorPipeline(DiffusionPipeline):
 
         # if we give just scores, target_scores is the first
 
-        # negative where:
-        #   person with opposite taste on options to our person would love it
-        if negative_by_options:
-            neg = scores
-            neg[:, 1:] = (5 - scores[:, 1:]) + 1
-            neg[:, :1] = 5
-        #   our person would hate it
-        else:
-            # so we give an embed that's hated by the same input scores as the one loved
-            neg = scores
-            neg[:, :1] = 1
+        if negative_scores is None:
+            # negative where:
+            #   person with opposite taste on options to our person would love it
+            if negative_by_options:
+                negative_scores = torch.clone(scores)
+                negative_scores[:, 1:] = (5 - scores[:, 1:]) + 1
+                negative_scores[:, :1] = 5
+            #   our person would hate it
+            else:
+                # so we give an embed that's hated by the same input scores as the one loved
+                negative_scores = torch.clone(scores)
+                negative_scores[:, :1] = 1
 
-        scores = torch.cat([scores, neg], 0)
+        scores = torch.cat([scores, negative_scores], 0)
 
         # repeat for negatives
         hidden_states = hidden_states.repeat(2, 1, 1)

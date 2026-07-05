@@ -2,8 +2,7 @@
 import torch
 import logging
 from diffusers import DiffusionPipeline
-import config
-
+from config import config
 from prior.pipeline_kandinsky_prior import KandinskyPriorPipeline
 from prior.prior_transformer import PriorTransformer
 
@@ -35,8 +34,6 @@ def get_loss(model, input, target, tokenizer, **kwargs):
     
     with torch.autocast(device_type='cuda', enabled=True, dtype=config.dtype):
         latent = torch.randn(input.shape[0], input.shape[-1], device=input.device)
-        # TODO use latent's rope to specify whether emb is high/low scoring;
-        #    i.e., don't only predict preferred embs
         output = model(latent, input, scores=kwargs['scores'], target_scores=kwargs['target_scores']).predicted_image_embedding
 
     output = output.to(torch.float32)
@@ -80,7 +77,7 @@ class Zoo(torch.nn.Module):
         generator = torch.Generator(device="cpu").manual_seed(787)
         # NOTE if you use diffusion at some point, could set seed.
         # TODO must setup giving scores now that we have them.
-        image_embeds, negative_image_embeds = self.prior_pipe(images, k=k).to_tuple()
+        image_embeds, negative_image_embeds = self.prior_pipe(prompt=images, k=k).to_tuple()
         images = self.kandinsky_pipe(
             num_inference_steps=50,
             image_embeds=image_embeds,

@@ -9,7 +9,8 @@ import time
 import torch
 
 
-import config
+from config import config
+
 from model import get_model_and_tokenizer
 
 model, model.prior_pipe.image_encoder = get_model_and_tokenizer(config.model_path, 
@@ -52,14 +53,14 @@ def generate_gpu(in_im_embs, prompt='the scene'):
     with torch.no_grad():
         in_im_embs = in_im_embs.to('cuda')
 
-        negative_image_embeds = in_im_embs[0] # model.prior_pipe.get_zero_embed()
-        positive_image_embeds = in_im_embs[1]
+        positive_image_embeds = in_im_embs[0]
+        negative_image_embeds = in_im_embs[1]
 
         images = model.kandinsky_pipe(
             num_inference_steps=50,
             image_embeds=positive_image_embeds,
             negative_image_embeds=negative_image_embeds,
-            guidance_scale=8,
+            guidance_scale=30,
         ).images[0]
         cond = (
                     model.prior_pipe.image_processor(images, return_tensors="pt")
@@ -89,46 +90,23 @@ def generate(in_im_embs, ):
 
 #######################
 
-def get_negative_scores(scores, negative_by_options=False):
-    # negative where:
-    #   person with opposite taste on options to our person would love it
-    if negative_by_options:
-        neg = scores
-        neg[:, 1:] = (5 - scores[:, 1:]) + 1
-        neg[:, :1] = 5
-    #   our person would hate it
-    else:
-        # so we give an embed that's hated by the same input scores as the one loved
-        neg = scores
-        neg[:, :1] = 1
-    return neg
 
-
-def sample_embs(prompt_embeds, scores, negative=False):
+def sample_embs(prompt_embeds, scores):
     # we would like a good image
     target_score = scores.new_ones((scores.shape[0], 1)) * 5
     scores = torch.cat([target_score, scores], 1)
-    if negative:
-        # we'd like a bad image.
-        scores = get_negative_scores(scores)
-
     if isinstance(prompt_embeds, list):
         prompt_embeds = torch.cat(prompt_embeds, 0)[None]
+
+    if prompt_embeds.shape[1] < k:
+        scores = torch.nn.functional.pad(scores, [0, 1+k-scores.shape[1]])
+
     
-    latent = torch.randn(prompt_embeds.shape[0], 1, prompt_embeds.shape[-1])
-
-    print(f'{scores=}')
-
-    if prompt_embeds.shape[1] < config.k:
-        prompt_embeds = torch.nn.functional.pad(prompt_embeds, [0, 0, 0, config.k-prompt_embeds.shape[1]])
-        print(f'{scores.shape=}')
-        # pad scorers to k embeddings plus target
-        scores = torch.nn.functional.pad(scores, [0, 1+config.k-scores.shape[1]])
-
-    assert prompt_embeds.shape[1] == config.k, f"The model is set to take `k`` cond image embeds but is shape {prompt_embeds.shape}"
-
-    image_embeds = model(latent.to('cuda'), prompt_embeds.to('cuda'), scores=scores).predicted_image_embedding
-
+    image_embeds = model.prior_pipe(prompt_embeds=prompt_embeds, 
+                                    k=k,
+                                    scores=scores,
+                                    negative_by_options=True,
+                                    ).to_tuple()
     return image_embeds
 
 def get_user_emb(embs, ys):
@@ -148,7 +126,8 @@ def get_user_emb(embs, ys):
     picked_embeddings = [embs[i] for i in inds]
     scores = torch.tensor([ys[i] for i in inds])[None]
 
-    image_embeds = torch.stack([sample_embs(picked_embeddings, scores, negative=True), sample_embs(picked_embeddings, scores)])
+    image_embeds = sample_embs(picked_embeddings, scores,)
+    image_embeds = torch.stack(image_embeds, 0)
     return image_embeds
 
 
@@ -375,6 +354,7 @@ Explore the latent space without text prompts based on your preferences. Learn m
             interactive=False,
             elem_id="output_im",
             type='filepath',
+            height=512,
         )
     
     
