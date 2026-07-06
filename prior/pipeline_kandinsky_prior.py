@@ -309,7 +309,6 @@ class KandinskyPriorPipeline(DiffusionPipeline):
         prompt,
         device,
         num_images_per_prompt,
-        do_classifier_free_guidance,
         negative_prompt=None,
     ):
         batch_size = len(prompt) if isinstance(prompt, list) else 1
@@ -324,44 +323,6 @@ class KandinskyPriorPipeline(DiffusionPipeline):
 
         prompt_embeds = prompt_embeds.repeat_interleave(num_images_per_prompt, dim=0)
 
-        if do_classifier_free_guidance:
-            if negative_prompt is None:
-                uncond_tokens = self.get_zero_embed(batch_size=prompt_embeds.shape[0])
-            elif type(prompt) is not type(negative_prompt):
-                raise TypeError(
-                    f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
-                    f" {type(prompt)}."
-                )
-            elif batch_size != len(negative_prompt):
-                raise ValueError(
-                    f"`negative_prompt`: {negative_prompt} has batch size {len(negative_prompt)}, but `prompt`:"
-                    f" {prompt} has batch size {batch_size}. Please make sure that passed `negative_prompt` matches"
-                    " the batch size of `prompt`."
-                )
-            else:
-                uncond_tokens = negative_prompt
-
-            cond = (
-                    self.image_processor(uncond_tokens, return_tensors="pt")
-                    .pixel_values[0]
-                    .unsqueeze(0)
-                    .to(dtype=self.image_encoder.dtype, device=device)
-                    )
-
-            negative_prompt_embeds = self.image_encoder(cond)["image_embeds"]
-
-            seq_len = negative_prompt_embeds.shape[1]
-            negative_prompt_embeds = negative_prompt_embeds.repeat(
-                1, num_images_per_prompt
-            )
-            negative_prompt_embeds = negative_prompt_embeds.view(
-                batch_size * num_images_per_prompt, seq_len
-            )
-
-            # For classifier free guidance, we need to do two forward passes.
-            # Here we concatenate the unconditional and text embeddings into a single batch
-            # to avoid doing two forward passes
-            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds])
         return prompt_embeds, None
 
     def enable_model_cpu_offload(self, gpu_id=0):
@@ -407,7 +368,7 @@ class KandinskyPriorPipeline(DiffusionPipeline):
         prompt=None,
         negative_prompt: Optional[Union[str, List[str]]] = None,
         num_images_per_prompt: int = 1,
-        num_inference_steps: int = 25,
+        num_inference_steps: int = 50,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         latents: Optional[torch.FloatTensor] = None,
         guidance_scale: float = 4.0,
@@ -470,7 +431,7 @@ class KandinskyPriorPipeline(DiffusionPipeline):
                 full_seq = []
                 for p in b:
                     prompt_embeds, text_mask = self._encode_prompt(
-                        p, device, num_images_per_prompt, False, negative_prompt
+                        p, device, num_images_per_prompt, negative_prompt
                     )
                     full_seq.append(prompt_embeds)
                     prompt_embeds = torch.cat(full_seq, 0)
@@ -499,7 +460,7 @@ class KandinskyPriorPipeline(DiffusionPipeline):
             # if negative_prompt:
             # actually can be any scores for the input; target only matters
 
-            # TODO will accumulate from our scores after awhile anyways
+            # NOTE given no scores, we assume these are beloved images.
             scores = torch.full((hidden_states.shape[0], 1+prompt_embeds.shape[1]), 5)
 
 
@@ -534,15 +495,27 @@ class KandinskyPriorPipeline(DiffusionPipeline):
         else:
             self.scheduler.set_timesteps(num_inference_steps, device=device)
             timesteps = self.scheduler.timesteps
+            
+            # we do classifier free guidance to obtain a neg and pos
+            #   embedding for the kandinsky decoder. These to embeddings
+            #   are generated against fully unconditional zero-ed scores.
+            # TODO could also zero image embeddings; could use guidance
+            #   that just applies cfg on the neg with the pos and vice versa.
+            into_scores = torch.cat([torch.zeros_like(scores), scores], 0)
+            latents = torch.randn(prompt_embeds.shape[0], 1, 
+                                  prompt_embeds.shape[-1]).to(prompt_embeds.device, prompt_embeds.dtype)
+            prompt_embeds = torch.cat([prompt_embeds] * 2)
+
             for i, t in enumerate(timesteps):
                 # expand the latents if we are doing classifier free guidance
-                latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
+                latent_model_input = torch.cat([latents] * 2)
 
                 predicted_image_embedding = self.prior(
                     latent_model_input,
                     proj_embedding=prompt_embeds,
                     attention_mask=text_mask,
-                    scores=scores
+                    scores=into_scores,
+                    timesteps=t,
                 ).predicted_image_embedding
 
                 predicted_image_embedding_uncond, predicted_image_embedding_text = predicted_image_embedding.chunk(2)
@@ -555,6 +528,9 @@ class KandinskyPriorPipeline(DiffusionPipeline):
                 else:
                     prev_timestep = timesteps[i + 1]
 
+                # NOTE: their schedule is fucked so you must squeeze
+                #   or it duplicates along the seq dim
+                latents = latents.squeeze()
                 latents = self.scheduler.step(
                     predicted_image_embedding,
                     timestep=t,

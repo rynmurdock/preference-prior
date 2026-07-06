@@ -245,7 +245,7 @@ class PriorTransformer(ModelMixin, ConfigMixin):
         embedding_proj_norm_type: Optional[str] = None,  # layer
         encoder_hid_proj_type: Optional[str] = "linear",  # linear
         added_emb_type: Optional[str] = "prd",  # prd
-        # time_embed_dim: Optional[int] = None,
+        time_embed_dim: Optional[int] = None,
         embedding_proj_dim: Optional[int] = None,
         clip_embed_dim: Optional[int] = None,
         do_diffusion: bool = False,
@@ -446,6 +446,7 @@ class PriorTransformer(ModelMixin, ConfigMixin):
 
             # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
             timesteps = timesteps * torch.ones(batch_size, dtype=timesteps.dtype, device=timesteps.device)
+
             timesteps_projected = self.time_proj(timesteps)
             # timesteps does not contain any weights and will always return f32 tensors
             # but time_embedding might be fp16, so we need to cast here.
@@ -482,6 +483,7 @@ class PriorTransformer(ModelMixin, ConfigMixin):
         # NOTE we add instead of concatenating; could ablate
         if len(time_embeddings.shape) == 2:
             time_embeddings = time_embeddings[:, None, :]
+        
         hidden_states = hidden_states + time_embeddings
 
         additional_embeds = additional_embeds + [

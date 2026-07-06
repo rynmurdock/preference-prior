@@ -30,13 +30,20 @@ def get_loss(model, input, target, tokenizer, **kwargs):
 
         target = tokenizer(target)['image_embeds']
         assert len(input.shape) == 3 # [batch, sequence, inner]
-    
-    with torch.autocast(device_type='cuda', enabled=True, dtype=config.dtype):
+
+
         latent = torch.randn(input.shape[0], input.shape[-1], device=input.device)
         if config.do_diffusion:
-            ts = torch.randint(0, 1000, (latent.shape[0]))
-            model.prior_pipe.scheduler.add_noise(target, noise=latent, timesteps=ts)
-
+            ts = torch.randint(0, 1000, (latent.shape[0],)).to(input.device)
+            # drop scores at some probability
+            drop_mask = torch.rand(latent.shape[0]) < .2
+            # TODO no reason to keep these in kwargs; they're required
+            kwargs['scores'][drop_mask] = 0
+            kwargs['target_scores'][drop_mask] = 0
+            latent = model.prior_pipe.scheduler.add_noise(target, 
+                                                          noise=latent, timesteps=ts)
+    
+    with torch.autocast(device_type='cuda', enabled=True, dtype=config.dtype):
         output = model(latent, input, 
                        scores=kwargs['scores'], 
                        target_scores=kwargs['target_scores'],
@@ -122,7 +129,8 @@ class Zoo(torch.nn.Module):
     
 def get_model_and_tokenizer(path, device, dtype, compile=None):
     if path:
-        prior = PriorTransformer.from_pretrained(path, do_diffusion=config.do_diffusion)
+        prior = PriorTransformer.from_pretrained(path, subfolder='prior' if 'kandinsky-community' in path else None,
+                                                 do_diffusion=config.do_diffusion)
     else:
         prior = PriorTransformer(do_diffusion=config.do_diffusion)
     prior = prior.to(device)
