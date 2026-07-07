@@ -374,7 +374,7 @@ class KandinskyPriorPipeline(DiffusionPipeline):
         guidance_scale: float = 4.0,
         output_type: Optional[str] = "pt",
         return_dict: bool = True,
-        negative_by_options=True,
+        negative_by_options=False,
         prompt_embeds=None,
         negative_scores=None,
         scores=None,

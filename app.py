@@ -60,7 +60,7 @@ def generate_gpu(in_im_embs, prompt='the scene'):
             num_inference_steps=50,
             image_embeds=positive_image_embeds,
             negative_image_embeds=negative_image_embeds,
-            guidance_scale=30,
+            guidance_scale=3,
         ).images[0]
         cond = (
                     model.prior_pipe.image_processor(images, return_tensors="pt")
@@ -105,7 +105,7 @@ def sample_embs(prompt_embeds, scores):
     image_embeds = model.prior_pipe(prompt_embeds=prompt_embeds, 
                                     k=k,
                                     scores=scores,
-                                    negative_by_options=True,
+                                    guidance_scale=3,
                                     ).to_tuple()
     return image_embeds
 

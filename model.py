@@ -76,7 +76,7 @@ def get_loss(model, input, target, tokenizer, **kwargs):
 
 
 class Zoo(torch.nn.Module):
-    def __init__(self, prior, prior_pipe, kandinsky_pipe, ) -> None:
+    def __init__(self, prior, prior_pipe, kandinsky_pipe=None, ) -> None:
         super().__init__()
         self.prior = prior
         self.prior_pipe = prior_pipe
@@ -96,19 +96,28 @@ class Zoo(torch.nn.Module):
         return pred
     
     @torch.no_grad()
-    def do_qual_val(self, images, k):
+    def do_qual_val(self, images, k, scores=None, path=None, 
+                    prior_guidance_scale=3,
+                    decoder_guidance_scale=3,
+                    negative_by_options=False,
+                    ):
         generator = torch.Generator(device="cpu").manual_seed(787)
         # NOTE if you use diffusion at some point, could set seed.
-        # TODO must setup giving scores now that we have them.
-        image_embeds, negative_image_embeds = self.prior_pipe(prompt=images, k=k).to_tuple()
+        # TODO config.k should really absorb into model class's self.k
+        image_embeds, negative_image_embeds = self.prior_pipe(prompt=images, 
+                                                              scores=scores,
+                                                              k=k,
+                                                              guidance_scale=prior_guidance_scale,
+                                                              negative_by_options=negative_by_options,
+                                                              ).to_tuple()
         images = self.kandinsky_pipe(
             num_inference_steps=50,
             image_embeds=image_embeds,
             negative_image_embeds=negative_image_embeds,
-            guidance_scale=8,
+            guidance_scale=decoder_guidance_scale,
             generator=generator
         ).images
-        images[0].save('latest_val.png')
+        images[0].save('latest_val.png' if path is None else path)
         return images
     
     @torch.no_grad()

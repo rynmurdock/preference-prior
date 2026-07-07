@@ -56,7 +56,7 @@ def main():
 
             if total_inds % config.freq == 0:
                 # NOTE autocasting because our fp32 training model is also our val model; only want calculations in half.
-                with torch.autocast(enabled=True, device_type='cuda', dtype=config.dtype): 
+                with torch.autocast(enabled=True, device_type='cuda', dtype=config.dtype):
                     # TODO make this not brittle
                     examples = [
                         # '../generative_recommender/Blue_Tigers_space/1o.png',

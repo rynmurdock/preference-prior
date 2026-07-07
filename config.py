@@ -4,7 +4,8 @@ import torch
 @dataclass
 class Config:
     # Model
-    model_path = None # str = 'kandinsky-community/kandinsky-2-2-prior'
+    # model_path = None # str = 'kandinsky-community/kandinsky-2-2-prior'
+    model_path = './last_epoch_ckpt' # str = 'kandinsky-community/kandinsky-2-2-prior'
     do_diffusion: bool = True
 
     # Hparams
@@ -14,8 +15,8 @@ class Config:
     cosine_loss_weight: float = 4
 
     # Training
-    epochs: int = 3000
-    max_steps: int = 4000
+    epochs: int = 3000000000000
+    max_steps: int = 400000
     do_compile: bool = True
     device: str = 'cuda'
     dtype: torch.dtype = field(default=torch.bfloat16, repr=False)
@@ -29,7 +30,7 @@ class Config:
 
     # Logging
     save_path: str = './'
-    freq: int = 400  # how often we save/log/etc.
+    freq: int = 100  # how often we save/log/etc.
 
 
 config = Config()
