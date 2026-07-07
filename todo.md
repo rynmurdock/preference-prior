@@ -10,8 +10,9 @@
   [] almost certain diffusion will be preferable but checking is fast + worthwhile.
   [] sweep diffusion noise schedule? 
   [] try flow matching?
-[] overhaul app.py demo
+[x] overhaul app.py demo
   - multi-user is definitely broken
+  [] add back multi-user functionality?
 [] panel for individual users from data
   [] and then from their history -> generation
 
