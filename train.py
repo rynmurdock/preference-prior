@@ -51,7 +51,7 @@ def main():
             if batch is None:
                 continue
 
-            input, input_scores, target, target_scores, sample_prompts, target_prompts = batch
+            input, input_scores, target, target_scores, sample_prompts, input_prompts = batch
             input = input.to(config.device)
             target = target.to(config.device)
 
@@ -87,13 +87,15 @@ def main():
                     plt.clf()
 
             optimizer.zero_grad()
-            loss, loss_logging_dict = get_loss(model, 
-                                                input, 
-                                                target, 
-                                                vision_tokenizer,
-                                                text_tokenizer,
+            loss, loss_logging_dict = get_loss(model=model, 
+                                                input=input, 
+                                                target=target, 
+                                                image_encoder=vision_tokenizer,
+                                                text_encoder=text_tokenizer,
                                                 scores=input_scores, 
-                                                target_scores=target_scores
+                                                target_scores=target_scores,
+                                                sample_prompts=sample_prompts,
+                                                input_prompts=input_prompts
                                                 )
             if total_inds % config.freq == 0:
                 mse_loss, cosine_loss = loss_logging_dict.get('mse_loss'), loss_logging_dict.get('cosine_loss')

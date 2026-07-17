@@ -6,7 +6,7 @@ from config import config
 from prior.pipeline_kandinsky_prior import KandinskyPriorPipeline
 from prior.prior_transformer import PriorTransformer
 
-def get_loss(model, input, target, image_encoder, text_encoder, scores, target_scores, **kwargs):
+def get_loss(model, input, target, image_encoder, text_encoder, scores, target_scores, sample_prompts, input_prompts, **kwargs):
     with torch.no_grad():
         assert len(input.shape) == 5 # [batch, s, c, w, h]
         cuts = config.number_k_clip_embed
@@ -21,6 +21,23 @@ def get_loss(model, input, target, image_encoder, text_encoder, scores, target_s
             full_seq.append(input)
         input = torch.stack(full_seq)
         input = input.view(-1, config.k, input.shape[-1])
+
+        ## Prompt condidtioning
+        flat_sample_prompts = [
+            prompt
+            for prompt_group in sample_prompts
+            for prompt in prompt_group
+        ]
+
+        sample_prompt_tokens = model.prior_pipe.tokenizer(
+            flat_sample_prompts,
+            padding="max_length", # To get consistent token lens of 77
+            truncation=True,
+            max_lenght=model.prior_pipe.tokenizer.model_max_length,
+            return_tensors="pt").to(input.device)
+        
+        sample_prompt_embeds = text_encoder(**sample_prompt_tokens).text_embeds.view(input.shape[0], input.shape[1], -1)
+        
         # rng drop out embeddings
         drop_mask = torch.rand((input.shape[0], input.shape[1])) < .3
 
@@ -29,6 +46,14 @@ def get_loss(model, input, target, image_encoder, text_encoder, scores, target_s
         scores[drop_mask] = 0
 
         target = image_encoder(target)['image_embeds']
+        target_prompt_tokens = model.prior_pipe.tokenizer(
+            input_prompts,
+            padding="max_length", # To get consistent token lens of 77
+            truncation=True,
+            max_lenght=model.prior_pipe.tokenizer.model_max_length,
+            return_tensors="pt").to(input.device)
+        target_prompt_embeds = text_encoder(**target_prompt_tokens).text_embeds
+
         assert len(input.shape) == 3 # [batch, sequence, inner]
 
 
