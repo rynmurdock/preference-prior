@@ -130,9 +130,15 @@ class Zoo(torch.nn.Module):
             input, input_scores, target, target_scores = batch
             input = input.to(config.device)
             target = target.to(config.device)
-            loss, loss_logging_dict = get_loss(self, 
-                                               input, target, self.prior_pipe.image_encoder, 
-                                               scores=input_scores, target_scores=target_scores)
+            loss, loss_logging_dict = get_loss(
+                        self,
+                        input,
+                        target,
+                        self.prior_pipe.image_encoder,
+                        self.prior_pipe.text_encoder,
+                        input_scores,
+                        target_scores,
+                    )
             losses.append(loss.item())
         return sum(losses) / len(losses)
     
