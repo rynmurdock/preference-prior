@@ -97,12 +97,12 @@ def my_collate(batch):
         sample_scores = torch.stack([torch.tensor(s['sample_scores']) 
                                                   for s in batch])
         sample_prompts = [s['sample_prompts'] for s in batch]
-        target_prompts = [s['target_prompt'] for s in batch]
+        input_prompts = [s['input_prompt'] for s in batch]
 
     except Exception as e:
       logging.warning('my_collate issue ', e)
       return None
-    return sample_pixels, sample_scores, target_pixels, target_scores, sample_prompts, target_prompts
+    return sample_pixels, sample_scores, target_pixels, target_scores, sample_prompts, input_prompts
 
 def process_json_to_dicts(json_data):
     pids_to_each_path_and_score = {}
@@ -152,9 +152,7 @@ class ImageFolderSample(torch.utils.data.Dataset):
                 raise ValueError("sample has fewer than 2 items")
             
             pid_target = random.choice(range(len(user_history)))
-            candidate_inds = random.sample([i for i in 
-                                    range(len(user_history)) 
-                                    if i != pid_target], self.k)
+            candidate_inds = [i for i in range(len(user_history)) if i != pid_target]
             
             if len(candidate_inds) >= self.k:
                 pid_cond_subset = random.sample(candidate_inds, self.k)
@@ -175,7 +173,7 @@ class ImageFolderSample(torch.utils.data.Dataset):
             
             input_paths = [user_history[i][0] for i in pid_cond_subset]
             input_scores = [int(user_history[i][1]) for i in pid_cond_subset]
-            target_prompt = user_history[pid_target][2]
+            input_prompt = user_history[pid_target][2]
             sample_prompts = [user_history[i][2] for i in pid_cond_subset]
 
             samples = torch.stack([self.image_processor(self.loader(f'{self.data_path}/../'+i)).data['pixel_values'][0] for i in input_paths])
@@ -185,7 +183,7 @@ class ImageFolderSample(torch.utils.data.Dataset):
                 'sample_scores': input_scores,
                 'target_scores': [target_score],
                 'sample_prompts': sample_prompts,
-                'target_prompt': target_prompt
+                'input_prompt': input_prompt
             }
         except Exception as e:
             logging.warning(f'getitem error: {e}')
