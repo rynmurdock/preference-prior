@@ -139,7 +139,7 @@ class ImageFolderSample(torch.utils.data.Dataset):
 
     def safe_getitem(self, index):
         try:
-            sample = self.samples[index]
+            user_history = self.samples[index]
             # sample k indices from user's ratings & one separate target
 
             # preferred_inds = [i for i in range(len(sample)) if sample[i][1] > 3]
@@ -148,14 +148,21 @@ class ImageFolderSample(torch.utils.data.Dataset):
             # TODO pad cases where len(sample) < k / prepackage interactions
             # would want to do it at point of embeddings
             # so would need to return list of tensors/similar, not single tensor
-
-            pid_target = random.choice(range(len(sample)))
-            pid_cond_subset = random.sample([i for i in 
-                                    range(len(sample)) 
+            if len(user_history) < 2:
+                raise ValueError("sample has fewer than 2 items")
+            
+            pid_target = random.choice(range(len(user_history)))
+            candidate_inds = random.sample([i for i in 
+                                    range(len(user_history)) 
                                     if i != pid_target], self.k)
+            
+            if len(candidate_inds) >= self.k:
+                pid_cond_subset = random.sample(candidate_inds, self.k)
+            else:
+                pid_cond_subset = random.choices(candidate_inds, k=self.k)
 
-            target_path = sample[pid_target][0]
-            target_score = int(sample[pid_target][1])
+            target_path = user_history[pid_target][0]
+            target_score = int(user_history[pid_target][1])
             # path set for PAMELA data relative to root
             target = self.image_processor(self.loader(
                 f'{self.data_path}/../'+target_path)).data['pixel_values'][0]
@@ -166,10 +173,10 @@ class ImageFolderSample(torch.utils.data.Dataset):
 
             assert len(pid_cond_subset) == self.k, f'{len(pid_cond_subset)=} != {self.k=}'
             
-            input_paths = [sample[i][0] for i in pid_cond_subset]
-            input_scores = [int(sample[i][1]) for i in pid_cond_subset]
-            target_prompt = sample[pid_target][2]
-            sample_prompts = [sample[i][2] for i in pid_cond_subset]
+            input_paths = [user_history[i][0] for i in pid_cond_subset]
+            input_scores = [int(user_history[i][1]) for i in pid_cond_subset]
+            target_prompt = user_history[pid_target][2]
+            sample_prompts = [user_history[i][2] for i in pid_cond_subset]
 
             samples = torch.stack([self.image_processor(self.loader(f'{self.data_path}/../'+i)).data['pixel_values'][0] for i in input_paths])
             return {
