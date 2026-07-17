@@ -96,11 +96,13 @@ def my_collate(batch):
                                                   for s in batch])
         sample_scores = torch.stack([torch.tensor(s['sample_scores']) 
                                                   for s in batch])
+        sample_prompts = [s['sample_prompts'] for s in batch]
+        target_prompts = [s['target_prompt'] for s in batch]
 
     except Exception as e:
       logging.warning('my_collate issue ', e)
       return None
-    return sample_pixels, sample_scores, target_pixels, target_scores
+    return sample_pixels, sample_scores, target_pixels, target_scores, sample_prompts, target_prompts
 
 def process_json_to_dicts(json_data):
     pids_to_each_path_and_score = {}
@@ -163,10 +165,21 @@ class ImageFolderSample(torch.utils.data.Dataset):
                 target = target[0]
 
             assert len(pid_cond_subset) == self.k, f'{len(pid_cond_subset)=} != {self.k=}'
+            
             input_paths = [sample[i][0] for i in pid_cond_subset]
             input_scores = [int(sample[i][1]) for i in pid_cond_subset]
+            target_prompt = sample[pid_target][2]
+            sample_prompts = [sample[i][2] for i in pid_cond_subset]
+
             samples = torch.stack([self.image_processor(self.loader(f'{self.data_path}/../'+i)).data['pixel_values'][0] for i in input_paths])
-            return {'sample_pixels': samples[:, :3], 'target_pixels': target[:3], 'sample_scores':input_scores, 'target_scores': [target_score]}
+            return {
+                'sample_pixels': samples[:, :3],
+                'target_pixels': target[:3],
+                'sample_scores': input_scores,
+                'target_scores': [target_score],
+                'sample_prompts': sample_prompts,
+                'target_prompt': target_prompt
+            }
         except Exception as e:
             logging.warning(f'getitem error: {e}')
             return self.__getitem__(random.randint(0, len(self)-1))
