@@ -6,7 +6,7 @@ from config import config
 from prior.pipeline_kandinsky_prior import KandinskyPriorPipeline
 from prior.prior_transformer import PriorTransformer
 
-def get_loss(model, input, target, tokenizer, **kwargs):
+def get_loss(model, input, target, image_encoder, text_encoder, scores, target_scores, **kwargs):
     with torch.no_grad():
         assert len(input.shape) == 5 # [batch, s, c, w, h]
         cuts = config.number_k_clip_embed
@@ -17,7 +17,7 @@ def get_loss(model, input, target, tokenizer, **kwargs):
         full_seq = []
         for b in input:
             # in our case, tokenizer is a clip embedding model
-            input = tokenizer(b)['image_embeds']
+            input = image_encoder(b)['image_embeds']
             full_seq.append(input)
         input = torch.stack(full_seq)
         input = input.view(-1, config.k, input.shape[-1])
@@ -26,9 +26,9 @@ def get_loss(model, input, target, tokenizer, **kwargs):
 
         # TODO we ought to attention mask & pad to largest
         input[drop_mask] = 0
-        kwargs['scores'][drop_mask] = 0
+        scores[drop_mask] = 0
 
-        target = tokenizer(target)['image_embeds']
+        target = image_encoder(target)['image_embeds']
         assert len(input.shape) == 3 # [batch, sequence, inner]
 
 
@@ -37,16 +37,16 @@ def get_loss(model, input, target, tokenizer, **kwargs):
             ts = torch.randint(0, 1000, (latent.shape[0],)).to(input.device)
             # drop scores at some probability
             drop_mask = torch.rand(latent.shape[0]) < .2
-            # TODO no reason to keep these in kwargs; they're required
-            kwargs['scores'][drop_mask] = 0
-            kwargs['target_scores'][drop_mask] = 0
+            
+            scores[drop_mask] = 0
+            target_scores[drop_mask] = 0
             latent = model.prior_pipe.scheduler.add_noise(target, 
                                                           noise=latent, timesteps=ts)
     
     with torch.autocast(device_type='cuda', enabled=True, dtype=config.dtype):
         output = model(latent, input, 
-                       scores=kwargs['scores'], 
-                       target_scores=kwargs['target_scores'],
+                       scores=scores, 
+                       target_scores=target_scores,
                        timesteps=ts if config.do_diffusion else None,
                        ).predicted_image_embedding
 
@@ -152,6 +152,7 @@ def get_model_and_tokenizer(path, device, dtype, compile=None):
     pipe_prior = KandinskyPriorPipeline.from_pretrained("kandinsky-community/kandinsky-2-2-prior", 
                                                         prior=prior, do_diffusion=config.do_diffusion).to(device)
     pipe_prior.image_encoder = pipe_prior.image_encoder.to(device, dtype)
+    pipe_prior.text_encoder = pipe_prior.text_encoder.to(device, dtype)
     # Note: don't set the prior to `dtype`` as it may be half precision, 
     #     and we're training with mixed precision
     #     so we need to keep our full-precision weight for trained params
@@ -159,7 +160,7 @@ def get_model_and_tokenizer(path, device, dtype, compile=None):
     model = Zoo(prior, pipe_prior, kandinsky_pipe).to(device)
     model.k = config.k
 
-    return model, model.prior_pipe.image_encoder
+    return model, model.prior_pipe.image_encoder, model.prior_pipe.text_encoder
 
 def get_optimizer_and_lr_sched(params, lr):
     logging.info(f'Training: {params}')

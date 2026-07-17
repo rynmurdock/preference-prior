@@ -89,8 +89,8 @@ def load_image(image_file, pil_image=None, input_size=224,):
 
 def my_collate(batch):
     try:
-        targets = torch.stack([s['target'] for s in batch])
-        samples = torch.stack([s['samples'] for s in batch])
+        target_pixels = torch.stack([s['target_pixels'] for s in batch])
+        sample_pixels = torch.stack([s['sample_pixels'] for s in batch])
 
         target_scores = torch.stack([torch.tensor(s['target_scores']) 
                                                   for s in batch])
@@ -100,27 +100,28 @@ def my_collate(batch):
     except Exception as e:
       logging.warning('my_collate issue ', e)
       return None
-    return samples, sample_scores, targets, target_scores
+    return sample_pixels, sample_scores, target_pixels, target_scores
 
 def process_json_to_dicts(json_data):
     pids_to_each_path_and_score = {}
     for s in json_data:
+        # interaction information
+        inter_info = [(s['image_path'], int(s['original_score']), s['image_metadata']['prompt'], s['user_demographics']['age'], 
+                        s['user_demographics']['gender'], s['user_demographics']['nationality'])]
         # if we don't already have the participant's list of (image, score)s,
         #   let's add it
         if not pids_to_each_path_and_score.get(s['participant_id'], False):
-            pids_to_each_path_and_score[s['participant_id']] = [(s['image_path'],
-                                                        int(s['original_score']))]
+            pids_to_each_path_and_score[s['participant_id']] = inter_info
         # otherwise, continue adding to their list
         else:
-            pids_to_each_path_and_score[s['participant_id']] += [(s['image_path'],
-                                                        int(s['original_score']))]
+            pids_to_each_path_and_score[s['participant_id']] += inter_info
     return [v for v in pids_to_each_path_and_score.values()]
 
 class ImageFolderSample(torch.utils.data.Dataset):
-    def __init__(self, data_path, k, processor,):
+    def __init__(self, data_path, k, image_processor,):
         super().__init__()
         self.k = k
-        self.processor = processor
+        self.image_processor = image_processor
 
         with open(data_path) as jsfile:
             self.json_data = json.load(jsfile)
@@ -154,7 +155,7 @@ class ImageFolderSample(torch.utils.data.Dataset):
             target_path = sample[pid_target][0]
             target_score = int(sample[pid_target][1])
             # path set for PAMELA data relative to root
-            target = self.processor(self.loader(
+            target = self.image_processor(self.loader(
                 f'{self.data_path}/../'+target_path)).data['pixel_values'][0]
 
             # not sure why this is necessary
@@ -164,8 +165,8 @@ class ImageFolderSample(torch.utils.data.Dataset):
             assert len(pid_cond_subset) == self.k, f'{len(pid_cond_subset)=} != {self.k=}'
             input_paths = [sample[i][0] for i in pid_cond_subset]
             input_scores = [int(sample[i][1]) for i in pid_cond_subset]
-            samples = torch.stack([self.processor(self.loader(f'{self.data_path}/../'+i)).data['pixel_values'][0] for i in input_paths])
-            return {'samples': samples[:, :3], 'target': target[:3], 'sample_scores':input_scores, 'target_scores': [target_score]}
+            samples = torch.stack([self.image_processor(self.loader(f'{self.data_path}/../'+i)).data['pixel_values'][0] for i in input_paths])
+            return {'sample_pixels': samples[:, :3], 'target_pixels': target[:3], 'sample_scores':input_scores, 'target_scores': [target_score]}
         except Exception as e:
             logging.warning(f'getitem error: {e}')
             return self.__getitem__(random.randint(0, len(self)-1))
@@ -176,8 +177,8 @@ class ImageFolderSample(torch.utils.data.Dataset):
 
 # https://data.mendeley.com/datasets/fs4k2zc5j5/3
 # Gomez, J. C., Ibarra-Manzano, M. A., & Almanza-Ojeda, D. L. (2017). User Identification in Pinterest Through the Refinement of Cascade Fusion of Text and Images. Research in Computing Science, 144, 41-52.
-def get_dataset(data_path, processor, k):
-    return ImageFolderSample(data_path, k, processor,)
+def get_dataset(data_path, image_processor, k):
+    return ImageFolderSample(data_path, k, image_processor,)
 
 
 def is_dir_empty(path):
@@ -192,14 +193,14 @@ def remove_empty_dirs(path_to_folders):
             os.rmdir(f)
 
 def get_dataloader(data_path, val_data_path, 
-                   batch_size, num_workers, processor, k):
+                   batch_size, num_workers, image_processor, k):
     val_batch_size = batch_size
 
     # we can die if we don't clean empty folders.
     remove_empty_dirs(data_path)
     
-    train_data = get_dataset(data_path, processor=processor, k=k)
-    val_data = get_dataset(val_data_path, processor=processor, k=k)
+    train_data = get_dataset(data_path, image_processor=image_processor, k=k)
+    val_data = get_dataset(val_data_path, image_processor=image_processor, k=k)
 
     # with pamela data, we have separate train/val sets
     # # subset specific "classes" (subfolders that contain groups of preferred images)
@@ -230,5 +231,3 @@ def get_dataloader(data_path, val_data_path,
                                             drop_last=True
                                             )
     return train_dataloader, val_dataloader
-
-
