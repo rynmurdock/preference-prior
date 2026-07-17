@@ -99,10 +99,24 @@ def my_collate(batch):
         sample_prompts = [s['sample_prompts'] for s in batch]
         input_prompts = [s['input_prompt'] for s in batch]
 
+        user_ages = torch.tensor([s['user_age'] for s in batch], dtype=torch.float32)
+        user_genders = [s['user_gender'] for s in batch]
+        user_nationalities = [s['user_nationality'] for s in batch]
+
     except Exception as e:
       logging.warning('my_collate issue ', e)
       return None
-    return sample_pixels, sample_scores, target_pixels, target_scores, sample_prompts, input_prompts
+    return (
+        sample_pixels,
+        sample_scores,
+        target_pixels,
+        target_scores,
+        sample_prompts,
+        input_prompts,
+        user_ages,
+        user_genders,
+        user_nationalities,
+    )
 
 def process_json_to_dicts(json_data):
     pids_to_each_path_and_score = {}
@@ -171,10 +185,17 @@ class ImageFolderSample(torch.utils.data.Dataset):
 
             assert len(pid_cond_subset) == self.k, f'{len(pid_cond_subset)=} != {self.k=}'
             
+            # Demographics
+            user_age = user_history[pid_target][3]
+            user_gender = user_history[pid_target][4]
+            user_nationality = user_history[pid_target][5]
+
             input_paths = [user_history[i][0] for i in pid_cond_subset]
             input_scores = [int(user_history[i][1]) for i in pid_cond_subset]
             input_prompt = user_history[pid_target][2]
             sample_prompts = [user_history[i][2] for i in pid_cond_subset]
+
+            
 
             samples = torch.stack([self.image_processor(self.loader(f'{self.data_path}/../'+i)).data['pixel_values'][0] for i in input_paths])
             return {
@@ -183,7 +204,10 @@ class ImageFolderSample(torch.utils.data.Dataset):
                 'sample_scores': input_scores,
                 'target_scores': [target_score],
                 'sample_prompts': sample_prompts,
-                'input_prompt': input_prompt
+                'input_prompt': input_prompt,
+                'user_age': user_age,
+                'user_gender': user_gender,
+                'user_nationality': user_nationality
             }
         except Exception as e:
             logging.warning(f'getitem error: {e}')

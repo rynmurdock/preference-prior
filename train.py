@@ -51,7 +51,7 @@ def main():
             if batch is None:
                 continue
 
-            input, input_scores, target, target_scores, sample_prompts, input_prompts = batch
+            input, input_scores, target, target_scores, sample_prompts, input_prompts, user_ages, user_genders, user_nationalities = batch
             input = input.to(config.device)
             target = target.to(config.device)
 
