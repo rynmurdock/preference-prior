@@ -106,17 +106,17 @@ def my_collate(batch):
     except Exception as e:
       logging.warning('my_collate issue ', e)
       return None
-    return (
-        sample_pixels,
-        sample_scores,
-        target_pixels,
-        target_scores,
-        sample_prompts,
-        input_prompts,
-        user_ages,
-        user_genders,
-        user_nationalities,
-    )
+    return {
+      "sample_pixels": sample_pixels,
+      "sample_scores": sample_scores,
+      "target_pixels": target_pixels,
+      "target_scores": target_scores,
+      "sample_prompts": sample_prompts,
+      "input_prompts": input_prompts,
+      "user_ages": user_ages,
+      "user_genders": user_genders,
+      "user_nationalities": user_nationalities,
+  }
 
 def process_json_to_dicts(json_data):
     pids_to_each_path_and_score = {}

@@ -152,17 +152,17 @@ class Zoo(torch.nn.Module):
             if batch is None:
                 continue
 
-            input, input_scores, target, target_scores = batch
-            input = input.to(config.device)
-            target = target.to(config.device)
+            
             loss, loss_logging_dict = get_loss(
-                        self,
-                        input,
-                        target,
-                        self.prior_pipe.image_encoder,
-                        self.prior_pipe.text_encoder,
-                        input_scores,
-                        target_scores,
+                model=self,
+                input=batch["sample_pixels"].to(config.device),
+                target=batch["target_pixels"].to(config.device), 
+                image_encoder=self.prior_pipe.image_encoder,
+                text_encoder=self.prior_pipe.text_encoder,
+                scores=batch["sample_scores"], 
+                target_scores=batch["target_scores"],
+                sample_prompts=batch["sample_prompts"],
+                input_prompts=batch["input_prompts"]
                     )
             losses.append(loss.item())
         return sum(losses) / len(losses)

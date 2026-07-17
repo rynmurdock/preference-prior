@@ -51,10 +51,6 @@ def main():
             if batch is None:
                 continue
 
-            input, input_scores, target, target_scores, sample_prompts, input_prompts, user_ages, user_genders, user_nationalities = batch
-            input = input.to(config.device)
-            target = target.to(config.device)
-
             if total_inds % config.freq == 0:
                 # NOTE autocasting because our fp32 training model is also our val model; only want calculations in half.
                 with torch.autocast(enabled=True, device_type='cuda', dtype=config.dtype):
@@ -88,14 +84,14 @@ def main():
 
             optimizer.zero_grad()
             loss, loss_logging_dict = get_loss(model=model, 
-                                                input=input, 
-                                                target=target, 
+                                                input=batch["sample_pixels"].to(config.device),
+                                                target=batch["target_pixels"].to(config.device), 
                                                 image_encoder=vision_tokenizer,
                                                 text_encoder=text_tokenizer,
-                                                scores=input_scores, 
-                                                target_scores=target_scores,
-                                                sample_prompts=sample_prompts,
-                                                input_prompts=input_prompts
+                                                scores=batch["sample_scores"], 
+                                                target_scores=batch["target_scores"],
+                                                sample_prompts=batch["sample_prompts"],
+                                                input_prompts=batch["input_prompts"]
                                                 )
             if total_inds % config.freq == 0:
                 mse_loss, cosine_loss = loss_logging_dict.get('mse_loss'), loss_logging_dict.get('cosine_loss')
