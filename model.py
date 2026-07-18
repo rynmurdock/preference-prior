@@ -101,12 +101,14 @@ def get_loss(model, input, target, image_encoder, text_encoder, scores, target_s
 
 
 class Zoo(torch.nn.Module):
-    def __init__(self, prior, prior_pipe, kandinsky_pipe=None, ) -> None:
+    def __init__(self, prior, prior_pipe, kandinsky_pipe=None, k=None) -> None:
         super().__init__()
         self.prior = prior
         self.prior_pipe = prior_pipe
         self.kandinsky_pipe = kandinsky_pipe
         self.pre_prior_transformer = None 
+        self.k = k
+
         # NOTE we may get better perf from freezing our prior 
         #     and only training a transformer adapter?
 
@@ -121,17 +123,16 @@ class Zoo(torch.nn.Module):
         return pred
     
     @torch.no_grad()
-    def do_qual_val(self, images, k, scores=None, path=None, 
+    def do_qual_val(self, images, scores=None, path=None, 
                     prior_guidance_scale=3,
                     decoder_guidance_scale=3,
                     negative_by_options=False,
                     ):
         generator = torch.Generator(device="cpu").manual_seed(787)
         # NOTE if you use diffusion at some point, could set seed.
-        # TODO config.k should really absorb into model class's self.k
         image_embeds, negative_image_embeds = self.prior_pipe(prompt=images, 
                                                               scores=scores,
-                                                              k=k,
+                                                              k=self.k,
                                                               guidance_scale=prior_guidance_scale,
                                                               negative_by_options=negative_by_options,
                                                               ).to_tuple()
@@ -167,7 +168,7 @@ class Zoo(torch.nn.Module):
             losses.append(loss.item())
         return sum(losses) / len(losses)
     
-def get_model_and_tokenizer(path, device, dtype, compile=None):
+def get_model_and_tokenizer(path,  device, dtype, compile=None):
     if path:
         prior = PriorTransformer.from_pretrained(path, subfolder='prior' if 'kandinsky-community' in path else None,
                                                  do_diffusion=config.do_diffusion)
@@ -188,7 +189,7 @@ def get_model_and_tokenizer(path, device, dtype, compile=None):
     #     and we're training with mixed precision
     #     so we need to keep our full-precision weight for trained params
     kandinsky_pipe = DiffusionPipeline.from_pretrained("kandinsky-community/kandinsky-2-2-decoder").to(device, dtype)
-    model = Zoo(prior, pipe_prior, kandinsky_pipe).to(device)
+    model = Zoo(prior, pipe_prior, kandinsky_pipe, config.k).to(device)
     model.k = config.k
 
     return model, model.prior_pipe.image_encoder, model.prior_pipe.text_encoder
